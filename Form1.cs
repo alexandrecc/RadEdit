@@ -21,7 +21,10 @@ namespace RadEdit
             SetTitle = 8,
             GetTitle = 9,
             TitleResponse = 10,
-            SetName = 11
+            SetName = 11,
+            GetName = 12,
+            NameResponse = 13,
+            GotoEnd = 14
         }
 
         private const int WM_COPYDATA = 0x004A;
@@ -85,6 +88,10 @@ namespace RadEdit
                 case CopyDataCommand.ErrorResponse:
                     // Responses are handled upstream by callers.
                     return true;
+                case CopyDataCommand.GetName:
+                    return TrySendName(senderHandle);
+                case CopyDataCommand.GotoEnd:
+                    return TryGotoEnd();
                 default:
                     NativeMethods.SendCopyData(senderHandle, CopyDataCommand.ErrorResponse, "Unknown command.");
                     return false;
@@ -210,6 +217,27 @@ namespace RadEdit
             return NativeMethods.SendCopyData(recipient, CopyDataCommand.TitleResponse, title);
         }
 
+        private bool TrySendName(IntPtr recipient)
+        {
+            if (recipient == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            string name = toolStripNameLabel.Text ?? string.Empty;
+            return NativeMethods.SendCopyData(recipient, CopyDataCommand.NameResponse, name);
+        }
+
+        private bool TryGotoEnd()
+        {
+            string text = richTextBox1.Text;
+            int endPos = text.TrimEnd('\r', '\n', ' ', '\t').Length;
+            richTextBox1.SelectionStart = endPos;
+            richTextBox1.ScrollToCaret();
+            richTextBox1.Focus();
+            return true;
+        }
+       
         private void ToolStripBoldButton_Click(object? sender, EventArgs e)
         {
             ApplySelectionStyle(FontStyle.Bold, toolStripBoldButton.CheckState != CheckState.Checked);

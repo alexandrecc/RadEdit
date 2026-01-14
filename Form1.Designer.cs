@@ -53,9 +53,9 @@ namespace RadEdit
             // toolStripTitleLabel
             // 
             toolStripTitleLabel.AutoSize = false;
-            toolStripTitleLabel.Margin = new Padding(0, 1, 10, 2);
+            toolStripTitleLabel.Margin = new Padding(5, 1, 10, 2); 
             toolStripTitleLabel.Name = "toolStripTitleLabel";
-            toolStripTitleLabel.Size = new Size(220, 24);
+            toolStripTitleLabel.Size = new Size(130, 24); 
             toolStripTitleLabel.TextAlign = ContentAlignment.MiddleLeft;
             toolStripTitleLabel.ToolTipText = "Current title";
             // 
@@ -64,7 +64,9 @@ namespace RadEdit
             toolStripNameLabel.AutoSize = false;
             toolStripNameLabel.Margin = new Padding(0, 1, 10, 2);
             toolStripNameLabel.Name = "toolStripNameLabel";
-            toolStripNameLabel.Size = new Size(300, 24);
+            toolStripNameLabel.Size = new Size(360, 24);  
+            toolStripNameLabel.TextAlign = ContentAlignment.MiddleCenter;
+            toolStripNameLabel.Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point);
             toolStripNameLabel.ToolTipText = "Current name";
             // 
             // toolStripBoldButton
