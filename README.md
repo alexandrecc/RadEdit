@@ -39,8 +39,11 @@ RadEdit listens for `WM_COPYDATA` messages whose `dwData` matches one of the fol
 | `GetTitle` | 9 | *(ignored)* | RadEdit responds with `TitleResponse` containing the current title. |
 | `TitleResponse` | 10 | Title text | Response emitted for `GetTitle`. |
 | `SetName` | 11 | Name text | Updates the centered name label on the tool strip. |
+| `GetName` | 12 | *(ignored)* | RadEdit responds with `NameResponse` containing the current name. |
+| `NameResponse` | 13 | Name text | Response emitted for `GetName`. |
+| `GotoEnd` | 14 | *(ignored)* | Moves the caret to the end of the document (ignores trailing whitespace) and scrolls into view. |
 
-> **Note**: RadEdit does not currently emit responses for commands other than `RequestTempFile`/`GetTitle`, but callers should always check for an `ErrorResponse` to surface issues.
+> **Note**: RadEdit does not currently emit responses for commands other than `RequestTempFile`/`GetTitle`/`GetName`, but callers should always check for an `ErrorResponse` to surface issues.
 
 ## AutoHotkey Integration Example
 
