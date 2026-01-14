@@ -14,6 +14,18 @@ dotnet run --project RadEdit.csproj
 
 A Debug build targets `net8.0-windows` and produces `bin\Debug\net8.0-windows\RadEdit.exe`.
 
+## Shipping Single-File (no bundled WebView2 runtime)
+
+Publish a single-file release that uses the installed WebView2 Evergreen Runtime:
+
+```powershell
+dotnet publish -c Release -r win-x64 --self-contained true `
+  /p:PublishSingleFile=true `
+  /p:IncludeNativeLibrariesForSelfExtract=true
+```
+
+The output is `bin\Release\net8.0-windows7.0\win-x64\publish\RadEdit.exe`. Make sure the target machine already has the WebView2 Runtime installed.
+
 ## Window Overview
 
 - Top tool strip contains:
@@ -42,15 +54,19 @@ RadEdit listens for `WM_COPYDATA` messages whose `dwData` matches one of the fol
 | `GetName` | 12 | *(ignored)* | RadEdit responds with `NameResponse` containing the current name. |
 | `NameResponse` | 13 | Name text | Response emitted for `GetName`. |
 | `GotoEnd` | 14 | *(ignored)* | Moves the caret to the end of the document (ignores trailing whitespace) and scrolls into view. |
+| `SetHtmlFile` | 15 | File path | Loads the HTML file in WebView2 and switches the UI into HTML mode. |
+| `RequestHtmlFile` | 16 | Optional path or filename | Exports the current DOM (including filled form values) to an HTML file and returns the absolute path via `HtmlFileResponse`. Uses the same `%TEMP%`/absolute path rules as `RequestTempFile`. |
+| `HtmlFileResponse` | 17 | File path | Response emitted by RadEdit for `RequestHtmlFile`. |
 
-> **Note**: RadEdit does not currently emit responses for commands other than `RequestTempFile`/`GetTitle`/`GetName`, but callers should always check for an `ErrorResponse` to surface issues.
+> **Note**: RadEdit does not currently emit responses for commands other than `RequestTempFile`/`RequestHtmlFile`/`GetTitle`/`GetName`, but callers should always check for an `ErrorResponse` to surface issues.
 
 ## AutoHotkey Integration Example
 
 ```ahk
 WM_COPYDATA := 0x4A
 CMD := Map("SetRtf", 1, "InsertRtf", 2, "SetFile", 3, "InsertFile", 4
-          , "RequestTemp", 5, "SetTitle", 8, "GetTitle", 9, "SetName", 11)
+          , "RequestTemp", 5, "SetTitle", 8, "GetTitle", 9, "SetName", 11
+          , "GetName", 12, "GotoEnd", 14, "SetHtmlFile", 15, "RequestHtmlFile", 16)
 
 target := WinExist("ahk_exe RadEdit.exe")
 if !target {
@@ -71,12 +87,14 @@ SendCopyData(target, CMD["RequestTemp"], "RadEditOutput")
 return
 
 CopyDataHandler(wParam, lParam, msg, hwnd) {
-    static CMD_TEMP := 5, CMD_TEMP_RESP := 6, CMD_ERROR := 7
+    static CMD_TEMP := 5, CMD_TEMP_RESP := 6, CMD_HTML_RESP := 17, CMD_ERROR := 7
     cmd := NumGet(lParam, 0, "UPtr")
     size := NumGet(lParam, A_PtrSize, "UInt")
     text := StrGet(NumGet(lParam, 2*A_PtrSize, "Ptr"), size/2, "UTF-16")
     if (cmd = CMD_TEMP_RESP) {
         MsgBox "Temp file created: " text
+    } else if (cmd = CMD_HTML_RESP) {
+        MsgBox "HTML file created: " text
     } else if (cmd = CMD_ERROR) {
         MsgBox "RadEdit error: " text
     }

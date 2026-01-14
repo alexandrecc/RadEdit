@@ -1,0 +1,1057 @@
+﻿<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>@@NOM_PAT@@ - @@NUM_DOS@@</title>
+  <style>
+    body { font-family: sans-serif; margin: 20px; }
+    fieldset { margin-bottom: 20px; padding: 15px; }
+    legend { font-weight: bold; }
+    label { display: block; margin-top: 8px; }
+    table { border-collapse: collapse; margin-top: 10px; width: 100%; }
+    th, td { border: 1px solid #ccc; padding: 4px 8px; text-align: center; }
+    th { background: #eee; }
+    .small-input { width: 80px; }
+    .tiny-input { width: 50px; }
+    .med-input { width: 150px; }
+    .full-width { width: 100%; }
+    .section-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 10px 25px;
+    }
+    .inline-options label {
+      display: inline-block;
+      margin-right: 10px;
+      margin-top: 4px;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>Rapport ObstÃ©trical - @@NOM_PAT@@ - @@NUM_DOS@@</h1>
+
+  <!-- 1) Identification -->
+  <fieldset>
+    <legend>Identification</legend>
+    <label>
+      NumÃ©ro de visite (obligatoire, servira au nom du fichier) :
+      <input type="text" id="visitId" value="@@REQNB@@" required>
+    </label>
+    <label>
+      No. Dossier (DOCVARIABLE <b>No_Dossier</b>) :
+      <input type="text" id="No_Dossier" value="@@NUM_DOS@@" required>
+    </label>
+  </fieldset>
+
+  <!-- 2) Contexte -->
+  <fieldset>
+    <legend>Contexte</legend>
+
+    <label>
+      Renseignements (DOCVARIABLE <b>Renseignements</b>) :
+      <textarea id="Renseignements" rows="3" class="full-width"></textarea>
+    </label>
+
+    <label>
+      Examen (DOCVARIABLE <b>Examen</b>) :
+      <select id="Examen" class="full-width">
+        <option value=""></option>
+        <option value="ECHO OBSTETRICALE 16 SEM ET PLUS(CROISSANCE)">
+          ECHO OBSTETRICALE 16 SEM ET PLUS(CROISSANCE)
+        </option>
+        <option value="ECHO OBSTETRICALE 16 SEM ET PLUS(CROISSANCE) (T)">
+          ECHO OBSTETRICALE 16 SEM ET PLUS(CROISSANCE) (T)
+        </option>
+        <option value="ECHO OBSTETRICALE 16 SEM ET PLUS(MORPHO)">
+          ECHO OBSTETRICALE 16 SEM ET PLUS(MORPHO)
+        </option>
+      </select>
+    </label>
+
+    <label>
+      Date de l'examen (DOCVARIABLE <b>Date_Exam</b>) :
+      <input type="date" id="Date_Exam" class="med-input" value="2026-01-07">
+    </label>
+
+    <label>
+      Doppler (DOCVARIABLE <b>Doppler</b>) :
+      <input type="checkbox" id="DopplerFlag">
+      <span>Inclure â€œDOPPLER EVALUATION DE RETARD DE CROISSANCEâ€</span>
+    </label>
+  </fieldset>
+
+  <!-- 3) AntÃ©cÃ©dents & datation -->
+  <fieldset>
+    <legend>AntÃ©cÃ©dents et datation</legend>
+    <div class="section-grid">
+
+      <!-- G / P / A : 0 Ã  10, un sous l'autre -->
+      <div>
+        <label>
+          G :<br>
+          <select id="G" class="tiny-input">
+            <option value=""></option>
+            <option>0</option><option>1</option><option>2</option><option>3</option><option>4</option>
+            <option>5</option><option>6</option><option>7</option><option>8</option><option>9</option><option>10</option>
+          </select>
+        </label>
+        <label>
+          P :<br>
+          <select id="P" class="tiny-input">
+            <option value=""></option>
+            <option>0</option><option>1</option><option>2</option><option>3</option><option>4</option>
+            <option>5</option><option>6</option><option>7</option><option>8</option><option>9</option><option>10</option>
+          </select>
+        </label>
+        <label>
+          A :<br>
+          <select id="A" class="tiny-input">
+            <option value=""></option>
+            <option>0</option><option>1</option><option>2</option><option>3</option><option>4</option>
+            <option>5</option><option>6</option><option>7</option><option>8</option><option>9</option><option>10</option>
+          </select>
+        </label>
+      </div>
+
+      <!-- Age_Ref -->
+      <label>
+        Ã‚ge de rÃ©fÃ©rence (DOCVARIABLE <b>Age_Ref</b>)<br>
+        <small>CalculÃ© automatiquement Ã  partir de DDM/DPA et Date_Exam</small><br>
+        Semaines :<br>
+        <select id="Age_Ref_Weeks" class="small-input">
+          <option value=""></option>
+        </select><br>
+        Jours :<br>
+        <select id="Age_Ref_Days" class="small-input">
+          <option value=""></option>
+          <option>0</option><option>1</option><option>2</option>
+          <option>3</option><option>4</option><option>5</option><option>6</option>
+        </select>
+      </label>
+
+      <!-- DDM / DPA -->
+      <label>
+        DDM (DOCVARIABLE <b>DDM</b>) :
+        <input type="date" id="DDM" class="med-input">
+      </label>
+      <label>
+        DPA (DOCVARIABLE <b>DPA</b>) :
+        <input type="date" id="DPA" class="med-input" value="2026-02-16">
+      </label>
+
+      <!-- Source Age_Ref -->
+      <div>
+        RÃ©fÃ©rence pour Age_Ref :
+        <div class="inline-options">
+          <label><input type="radio" name="AgeRefSource" value="DDM" checked> BasÃ© sur DDM</label>
+          <label><input type="radio" name="AgeRefSource" value="DPA"> BasÃ© sur DPA</label>
+        </div>
+      </div>
+    </div>
+  </fieldset>
+
+  <!-- 4) Statut foetal -->
+  <fieldset>
+    <legend>Statut foetal</legend>
+    <div class="section-grid">
+      <label>
+        Nombre de foetus (DOCVARIABLE <b>Foetus_Nb</b>) :
+        <input type="text" id="Foetus_Nb" class="small-input" value="1">
+      </label>
+
+      <div>
+        Coeur foetal (DOCVARIABLE <b>Coeur_Foet</b>) :
+        <div class="inline-options">
+          <label><input type="radio" name="Coeur_Foet" value="Oui"> Oui</label>
+          <label><input type="radio" name="Coeur_Foet" value="Non"> Non</label>
+        </div>
+      </div>
+
+      <div>
+        Mouvements foetaux (DOCVARIABLE <b>Mvt_Foet</b>) :
+        <div class="inline-options">
+          <label><input type="radio" name="Mvt_Foet" value="Oui"> Oui</label>
+          <label><input type="radio" name="Mvt_Foet" value="Non"> Non</label>
+        </div>
+      </div>
+
+      <div>
+        PrÃ©sentation (DOCVARIABLE <b>Presentation</b>) :
+        <div class="inline-options">
+          <label><input type="radio" name="Presentation" value="CÃ©phalique"> CÃ©phalique</label>
+          <label><input type="radio" name="Presentation" value="SiÃ¨ge"> SiÃ¨ge</label>
+          <label><input type="radio" name="Presentation" value="Transverse"> Transverse</label>
+          <label><input type="radio" name="Presentation" value="Oblique"> Oblique</label>
+          <label><input type="radio" name="Presentation" value="Variable"> Variable</label>
+        </div>
+      </div>
+    </div>
+  </fieldset>
+
+  <!-- 5) BiomÃ©trie -->
+  <fieldset>
+    <legend>BiomÃ©trie</legend>
+    <div class="section-grid">
+      <div>
+        <strong>BPD</strong><br>
+        <label>Mesure_BPD :
+          <input type="text" id="Mesure_BPD" class="small-input" value="84.4">
+        </label>
+        <label>Perc_BPD :
+          <input type="text" id="Perc_BPD" class="small-input" value="75">
+        </label>
+        <label>NbSem_BPD (x,y) :
+          <input type="text" id="NbSem_BPD" class="small-input" value="34,0">
+        </label>
+      </div>
+
+      <div>
+        <strong>CC</strong><br>
+        <label>Mesure_CC :
+          <input type="text" id="Mesure_CC" class="small-input" value="307.0">
+        </label>
+        <label>Perc_CC :
+          <input type="text" id="Perc_CC" class="small-input" value="78">
+        </label>
+        <label>NbSem_CC (x,y) :
+          <input type="text" id="NbSem_CC" class="small-input" value="34,2">
+        </label>
+      </div>
+
+      <div>
+        <strong>FL</strong><br>
+        <label>Mesure_FL :
+          <input type="text" id="Mesure_FL" class="small-input" value="63.5">
+        </label>
+        <label>Perc_FL :
+          <input type="text" id="Perc_FL" class="small-input" value="42">
+        </label>
+        <label>NbSem_FL (x,y) :
+          <input type="text" id="NbSem_FL" class="small-input" value="33,6">
+        </label>
+      </div>
+
+      <div>
+        <strong>HumÃ©rus</strong><br>
+        <label>Mesure_Hum :
+          <input type="text" id="Mesure_Hum" class="small-input">
+        </label>
+        <label>Perc_Hum :
+          <input type="text" id="Perc_Hum" class="small-input">
+        </label>
+        <label>NbSem_Hum (x,y) :
+          <input type="text" id="NbSem_Hum" class="small-input">
+        </label>
+      </div>
+
+      <div>
+        <strong>AC</strong><br>
+        <label>Mesure_AC :
+          <input type="text" id="Mesure_AC" class="small-input" value="321.5">
+        </label>
+        <label>Perc_AC :
+          <input type="text" id="Perc_AC" class="small-input">
+        </label>
+        <label>NbSem_AC (x,y) :
+          <input type="text" id="NbSem_AC" class="small-input" value="36,1">
+        </label>
+      </div>
+    </div>
+  </fieldset>
+
+  <!-- 6) Anatomie -->
+  <fieldset>
+    <legend>Anatomie (DOCVARIABLE 17Nâ€“28NV)</legend>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Structure</th>
+          <th>NORMAL<br><input type="checkbox" id="allNormal"></th>
+          <th>VU<br><input type="checkbox" id="allVu"></th>
+          <th>NON VU<br><input type="checkbox" id="allNonVu"></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr data-code="17">
+          <td>Plan du bipariÃ©tal (17)</td>
+          <td><input type="checkbox" class="anatomie-normal"></td>
+          <td><input type="checkbox" class="anatomie-vu"></td>
+          <td><input type="checkbox" class="anatomie-nonvu"></td>
+        </tr>
+        <tr data-code="18">
+          <td>Fosse postÃ©rieure (18)</td>
+          <td><input type="checkbox" class="anatomie-normal"></td>
+          <td><input type="checkbox" class="anatomie-vu"></td>
+          <td><input type="checkbox" class="anatomie-nonvu"></td>
+        </tr>
+        <tr data-code="19">
+          <td>Atrium (19)</td>
+          <td><input type="checkbox" class="anatomie-normal"></td>
+          <td><input type="checkbox" class="anatomie-vu"></td>
+          <td><input type="checkbox" class="anatomie-nonvu"></td>
+        </tr>
+        <tr data-code="20">
+          <td>TMO (20)</td>
+          <td><input type="checkbox" class="anatomie-normal"></td>
+          <td><input type="checkbox" class="anatomie-vu"></td>
+          <td><input type="checkbox" class="anatomie-nonvu"></td>
+        </tr>
+        <tr data-code="21">
+          <td>Rachis (21)</td>
+          <td><input type="checkbox" class="anatomie-normal"></td>
+          <td><input type="checkbox" class="anatomie-vu"></td>
+          <td><input type="checkbox" class="anatomie-nonvu"></td>
+        </tr>
+        <tr data-code="22">
+          <td>4 chambres cardiaques (22)</td>
+          <td><input type="checkbox" class="anatomie-normal"></td>
+          <td><input type="checkbox" class="anatomie-vu"></td>
+          <td><input type="checkbox" class="anatomie-nonvu"></td>
+        </tr>
+        <tr data-code="23">
+          <td>Croisements vasculaires (23)</td>
+          <td><input type="checkbox" class="anatomie-normal"></td>
+          <td><input type="checkbox" class="anatomie-vu"></td>
+          <td><input type="checkbox" class="anatomie-nonvu"></td>
+        </tr>
+        <tr data-code="24">
+          <td>Estomac (24)</td>
+          <td><input type="checkbox" class="anatomie-normal"></td>
+          <td><input type="checkbox" class="anatomie-vu"></td>
+          <td><input type="checkbox" class="anatomie-nonvu"></td>
+        </tr>
+        <tr data-code="25">
+          <td>Paroi abdominale (25)</td>
+          <td><input type="checkbox" class="anatomie-normal"></td>
+          <td><input type="checkbox" class="anatomie-vu"></td>
+          <td><input type="checkbox" class="anatomie-nonvu"></td>
+        </tr>
+        <tr data-code="26">
+          <td>Reins (26)</td>
+          <td><input type="checkbox" class="anatomie-normal"></td>
+          <td><input type="checkbox" class="anatomie-vu"></td>
+          <td><input type="checkbox" class="anatomie-nonvu"></td>
+        </tr>
+        <tr data-code="27">
+          <td>Vessie (27)</td>
+          <td><input type="checkbox" class="anatomie-normal"></td>
+          <td><input type="checkbox" class="anatomie-vu"></td>
+          <td><input type="checkbox" class="anatomie-nonvu"></td>
+        </tr>
+        <tr data-code="28">
+          <td>Quatre membres (28)</td>
+          <td><input type="checkbox" class="anatomie-normal"></td>
+          <td><input type="checkbox" class="anatomie-vu"></td>
+          <td><input type="checkbox" class="anatomie-nonvu"></td>
+        </tr>
+      </tbody>
+    </table>
+  </fieldset>
+
+  <!-- 7) Liquide amniotique & placenta -->
+  <fieldset>
+    <legend>Liquide amniotique & Placenta</legend>
+    <div class="section-grid">
+      <div>
+        <strong>Liquide_Amnio</strong><br>
+        <div class="inline-options">
+          <label><input type="radio" name="Liquide_Amnio" value="Normal"> Normal</label>
+          <label><input type="radio" name="Liquide_Amnio" value="Oligohydramnios"> Oligohydramnios</label>
+          <label><input type="radio" name="Liquide_Amnio" value="Polyhydramnios"> Polyhydramnios</label>
+        </div>
+        <label>
+          Plus grande poche (Amnio_PPP) :
+          <input type="text" id="Amnio_PPP" class="small-input">
+        </label>
+      </div>
+
+      <div>
+        <strong>Placenta</strong><br>
+        <div class="inline-options">
+          <label><input type="radio" name="Placenta" value="Normal"> Normal</label>
+          <label><input type="radio" name="Placenta" value="Bas insÃ©rÃ©"> Bas insÃ©rÃ©</label>
+          <label><input type="radio" name="Placenta" value="Marginal"> Marginal</label>
+          <label><input type="radio" name="Placenta" value="Praevia"> Praevia</label>
+        </div>
+      </div>
+
+      <div>
+        <strong>Placenta_Loc</strong><br>
+        <div class="inline-options">
+          <label><input type="checkbox" class="placenta-loc" value="AntÃ©rieur"> AntÃ©rieur</label>
+          <label><input type="checkbox" class="placenta-loc" value="PostÃ©rieur"> PostÃ©rieur</label>
+          <label><input type="checkbox" class="placenta-loc" value="Fundique"> Fundique</label>
+          <label><input type="checkbox" class="placenta-loc" value="LatÃ©ral gauche"> LatÃ©ral gauche</label>
+          <label><input type="checkbox" class="placenta-loc" value="LatÃ©ral droit"> LatÃ©ral droit</label>
+        </div>
+      </div>
+
+      <div>
+        <strong>Placenta_Grade</strong><br>
+        <div class="inline-options">
+          <label><input type="radio" name="Placenta_Grade" value="0"> 0</label>
+          <label><input type="radio" name="Placenta_Grade" value="1"> 1</label>
+          <label><input type="radio" name="Placenta_Grade" value="2"> 2</label>
+          <label><input type="radio" name="Placenta_Grade" value="3"> 3</label>
+        </div>
+      </div>
+    </div>
+  </fieldset>
+
+  <!-- 8) Doppler -->
+  <fieldset id="dopplerSection" style="display:none;">
+    <legend>Doppler</legend>
+    <div class="section-grid">
+      <div>
+        <strong>ArtÃ¨re ombilicale (UA)</strong><br>
+        <label>UA_PI :
+          <input type="text" id="UA_PI" class="small-input">
+        </label>
+        <label>UA_Perc :
+          <input type="text" id="UA_Perc" class="small-input">
+        </label>
+        <div class="inline-options">
+          UA_Result :
+          <label><input type="radio" name="UA_Result" value="Normal"> Normal</label>
+          <label><input type="radio" name="UA_Result" value="Anormal"> Anormal</label>
+        </div>
+      </div>
+
+      <div>
+        <strong>ArtÃ¨re cÃ©rÃ©brale moyenne (MCA)</strong><br>
+        <label>MCA_PI :
+          <input type="text" id="MCA_PI" class="small-input">
+        </label>
+        <label>MCA_Perc :
+          <input type="text" id="MCA_Perc" class="small-input">
+        </label>
+        <div class="inline-options">
+          MCA_Result :
+          <label><input type="radio" name="MCA_Result" value="Normal"> Normal</label>
+          <label><input type="radio" name="MCA_Result" value="Anormal"> Anormal</label>
+        </div>
+      </div>
+
+      <div>
+        <strong>Ratio cÃ©rÃ©bro-placentaire (RCP)</strong><br>
+        <label>RCP :
+          <input type="text" id="RCP" class="small-input">
+        </label>
+        <label>Ratio_CP_Perc :
+          <input type="text" id="Ratio_CP_Perc" class="small-input">
+        </label>
+        <div class="inline-options">
+          Ratio_CP_Result :
+          <label><input type="radio" name="Ratio_CP_Result" value="Normal"> Normal</label>
+          <label><input type="radio" name="Ratio_CP_Result" value="Anormal"> Anormal</label>
+        </div>
+      </div>
+    </div>
+  </fieldset>
+
+  <!-- 9) Conclusion -->
+  <fieldset>
+    <legend>Conclusion</legend>
+    <div class="section-grid">
+      <label>
+        Age_Echo (DOCVARIABLE <b>Age_Echo</b>)<br>
+        <small>Semaines (6â€“42) et jours (0â€“6)</small><br>
+        Semaines :<br>
+        <select id="Age_Echo_Weeks" class="small-input">
+          <option value=""></option>
+        </select><br>
+        Jours :<br>
+        <select id="Age_Echo_Days" class="small-input">
+          <option value=""></option>
+          <option>0</option><option>1</option><option>2</option>
+          <option>3</option><option>4</option><option>5</option><option>6</option>
+        </select>
+      </label>
+      <label>
+        Poids :
+        <input type="text" id="Poids" class="small-input" value="2605">
+      </label>
+      <label>
+        Perc (percentile poids) :
+        <input type="text" id="Perc" class="small-input" value="92">
+      </label>
+    </div>
+
+    <label>
+      Remarques :
+      <textarea id="Remarques" rows="3" class="full-width"></textarea>
+    </label>
+
+    <label>
+      Notes technologue :
+      <textarea id="Notes_Technologue" rows="3" class="full-width"></textarea>
+    </label>
+  </fieldset>
+
+  <button id="saveTxtOnlyBtn">Sauvegarder donnÃ©es pour rapport</button>
+  <button id="generateBtn">Sauvegarder/Archiver - Technologues</button>
+
+  <script>
+    // Remplir Age_Ref_Weeks et Age_Echo_Weeks (6 Ã  42)
+    (function fillWeeks() {
+      const ids = ["Age_Ref_Weeks", "Age_Echo_Weeks"];
+      ids.forEach(id => {
+        const sel = document.getElementById(id);
+        if (!sel) return;
+        for (let i = 6; i <= 42; i++) {
+          const opt = document.createElement("option");
+          opt.value = String(i);
+          opt.textContent = String(i);
+          sel.appendChild(opt);
+        }
+      });
+    })();
+
+    function formatWeeksDaysText(raw) {
+      raw = raw.trim();
+      if (!raw) return "";
+    
+      // Cas 1 : x,y ou x.y ou x y  => x sem y jrs
+      let m = raw.match(/^(\d{1,2})\s*[,\.\s]\s*(\d{1,2})$/);
+      if (m) {
+        return m[1] + " sem " + m[2] + " jrs";
+      }
+
+      // Cas 2 : seulement un entier x => x sem 0 jrs
+      m = raw.match(/^(\d{1,2})$/);
+      if (m) {
+        return m[1] + " sem 0 jrs";
+     }
+
+      // Sinon, on renvoie tel quel
+      return raw;
+    }
+
+
+    function getRadioValue(name) {
+      const el = document.querySelector(`input[name="${name}"]:checked`);
+      return el ? el.value : "";
+    }
+
+    function getPlacentaLocValue() {
+      const boxes = document.querySelectorAll(".placenta-loc:checked");
+      const vals = [];
+      boxes.forEach(b => vals.push(b.value));
+      return vals.join(", ");
+    }
+
+    function addMmSuffix(raw) {
+      raw = raw.trim();
+      if (!raw) return "";
+      if (/mm\b/i.test(raw)) return raw;
+      return raw + " mm";
+    }
+
+    function addPercSuffix(raw) {
+      raw = raw.trim();
+      if (!raw) return "";
+      if (/perc/i.test(raw)) return raw;
+      return raw + "e perc.";
+    }
+
+    function addPercWithAgeRef(raw, ageRef) {
+      let base = addPercSuffix(raw);
+      if (!base) return "";
+      if (ageRef) return base + " de " + ageRef;
+      return base;
+    }
+
+    function addGramSuffix(raw) {
+      raw = raw.trim();
+      if (!raw) return "";
+      if (/\bg\b/i.test(raw)) return raw;
+      return raw + " g";
+    }
+
+    function addCmSuffix(raw) {
+      raw = raw.trim();
+      if (!raw) return "";
+      if (/\bcm\b/i.test(raw)) return raw;  // si "cm" dÃ©jÃ  prÃ©sent, on ne double pas
+      return raw + " cm";
+    }
+
+    // Radios effaÃ§ables
+    (function makeRadiosClearable() {
+      const radios = document.querySelectorAll('input[type="radio"]');
+      radios.forEach(r => {
+        r.addEventListener('mousedown', function () {
+          this._wasChecked = this.checked;
+        });
+        r.addEventListener('click', function () {
+          if (this._wasChecked) this.checked = false;
+        });
+      });
+    })();
+
+    // Doppler visible si case cochÃ©e
+    function updateDopplerVisibility() {
+      const flag = document.getElementById('DopplerFlag');
+      const section = document.getElementById('dopplerSection');
+      if (!flag || !section) return;
+      section.style.display = flag.checked ? '' : 'none';
+    }
+    document.getElementById('DopplerFlag').addEventListener('change', updateDopplerVisibility);
+    updateDopplerVisibility();
+
+    // Logique anatomie
+    function setupAnatomieLogic() {
+      const rows = document.querySelectorAll('tbody tr[data-code]');
+      rows.forEach(row => {
+        const normal = row.querySelector('.anatomie-normal');
+        const vu = row.querySelector('.anatomie-vu');
+        const nonvu = row.querySelector('.anatomie-nonvu');
+
+        nonvu.addEventListener('change', () => {
+          if (nonvu.checked) {
+            vu.checked = false;
+            normal.checked = false;
+          }
+        });
+
+        normal.addEventListener('change', () => {
+          if (normal.checked) {
+            vu.checked = true;
+            nonvu.checked = false;
+          }
+        });
+
+        vu.addEventListener('change', () => {
+          if (vu.checked) {
+            nonvu.checked = false;
+          } else {
+            normal.checked = false;
+          }
+        });
+      });
+
+      const allNormal = document.getElementById('allNormal');
+      const allVu = document.getElementById('allVu');
+      const allNonVu = document.getElementById('allNonVu');
+
+      allNormal.addEventListener('change', () => {
+        const rows = document.querySelectorAll('tbody tr[data-code]');
+        rows.forEach(row => {
+          const normal = row.querySelector('.anatomie-normal');
+          const vu = row.querySelector('.anatomie-vu');
+          const nonvu = row.querySelector('.anatomie-nonvu');
+          if (allNormal.checked) {
+            normal.checked = true;
+            vu.checked = true;
+            nonvu.checked = false;
+          }
+        });
+      });
+
+      allVu.addEventListener('change', () => {
+        const rows = document.querySelectorAll('tbody tr[data-code]');
+        rows.forEach(row => {
+          const normal = row.querySelector('.anatomie-normal');
+          const vu = row.querySelector('.anatomie-vu');
+          const nonvu = row.querySelector('.anatomie-nonvu');
+          if (allVu.checked) {
+            vu.checked = true;
+            nonvu.checked = false;
+            normal.checked = false;
+          }
+        });
+      });
+
+      allNonVu.addEventListener('change', () => {
+        const rows = document.querySelectorAll('tbody tr[data-code]');
+        rows.forEach(row => {
+          const normal = row.querySelector('.anatomie-normal');
+          const vu = row.querySelector('.anatomie-vu');
+          const nonvu = row.querySelector('.anatomie-nonvu');
+          if (allNonVu.checked) {
+            nonvu.checked = true;
+            vu.checked = false;
+            normal.checked = false;
+          }
+        });
+      });
+    }
+    setupAnatomieLogic();
+
+    // Age_Ref auto
+    function parseISODate(str) {
+      if (!str) return null;
+      const parts = str.split("-");
+      if (parts.length !== 3) return null;
+      const y = parseInt(parts[0], 10);
+      const m = parseInt(parts[1], 10);
+      const d = parseInt(parts[2], 10);
+      if (isNaN(y) || isNaN(m) || isNaN(d)) return null;
+      return new Date(y, m - 1, d);
+    }
+
+    function recalcAgeRef() {
+      const examStr = document.getElementById("Date_Exam").value;
+      if (!examStr) {
+        document.getElementById("Age_Ref_Weeks").value = "";
+        document.getElementById("Age_Ref_Days").value = "";
+        return;
+      }
+      const examDate = parseISODate(examStr);
+      if (!examDate) return;
+
+      const srcRadio = document.querySelector('input[name="AgeRefSource"]:checked');
+      const src = srcRadio ? srcRadio.value : "DDM";
+      let diffDays;
+
+      if (src === "DPA") {
+        const refStr = document.getElementById("DPA").value;
+        if (!refStr) {
+          document.getElementById("Age_Ref_Weeks").value = "";
+          document.getElementById("Age_Ref_Days").value = "";
+          return;
+        }
+        const dpa = parseISODate(refStr);
+        if (!dpa) return;
+        const refDate = new Date(dpa.getTime() - 280 * 24 * 60 * 60 * 1000);
+        diffDays = Math.floor((examDate - refDate) / (1000 * 60 * 60 * 24));
+      } else {
+        const refStr = document.getElementById("DDM").value;
+        if (!refStr) {
+          document.getElementById("Age_Ref_Weeks").value = "";
+          document.getElementById("Age_Ref_Days").value = "";
+          return;
+        }
+        const ddm = parseISODate(refStr);
+        if (!ddm) return;
+        diffDays = Math.floor((examDate - ddm) / (1000 * 60 * 60 * 24));
+      }
+
+      if (!isFinite(diffDays) || diffDays < 0) {
+        document.getElementById("Age_Ref_Weeks").value = "";
+        document.getElementById("Age_Ref_Days").value = "";
+        return;
+      }
+
+      const weeks = Math.floor(diffDays / 7);
+      const days = diffDays % 7;
+
+      const wSel = document.getElementById("Age_Ref_Weeks");
+      const dSel = document.getElementById("Age_Ref_Days");
+
+      if (wSel) {
+        const wStr = String(weeks);
+        let found = false;
+        for (const opt of wSel.options) {
+          if (opt.value === wStr) { found = true; break; }
+        }
+        wSel.value = found ? wStr : "";
+      }
+      if (dSel) {
+        const dStr = String(days);
+        let found = false;
+        for (const opt of dSel.options) {
+          if (opt.value === dStr) { found = true; break; }
+        }
+        dSel.value = found ? dStr : "";
+      }
+    }
+
+    document.getElementById("Date_Exam").addEventListener("change", recalcAgeRef);
+    document.getElementById("DDM").addEventListener("change", recalcAgeRef);
+    document.getElementById("DPA").addEventListener("change", recalcAgeRef);
+    document.querySelectorAll('input[name="AgeRefSource"]').forEach(r => {
+      r.addEventListener("change", recalcAgeRef);
+    });
+
+    // Sync champs -> attributs pour HTML prÃ©-rempli
+    function syncFormToAttributes() {
+      const fields = document.querySelectorAll('input, textarea, select');
+      fields.forEach(el => {
+        const tag = el.tagName;
+        if (tag === 'INPUT') {
+          const type = el.type;
+          if (type === 'checkbox' || type === 'radio') {
+            if (el.checked) el.setAttribute('checked', 'checked');
+            else el.removeAttribute('checked');
+          } else {
+            el.setAttribute('value', el.value);
+          }
+        } else if (tag === 'TEXTAREA') {
+          el.textContent = el.value;
+        } else if (tag === 'SELECT') {
+          Array.from(el.options).forEach(opt => {
+            if (opt.selected) opt.setAttribute('selected', 'selected');
+            else opt.removeAttribute('selected');
+          });
+        }
+      });
+    }
+
+    // PrÃ©-remplissage Ã  partir des paramÃ¨tres dans l'URL (compatible vieux navigateurs)
+    function prefillFromUrl() {
+      const qs = window.location.search;
+      if (!qs || qs.length <= 1) return;
+
+      const params = {};
+      const pairs = qs.substring(1).split("&");
+      for (let i = 0; i < pairs.length; i++) {
+        const part = pairs[i];
+        if (!part) continue;
+        const eqIndex = part.indexOf("=");
+        let key, value;
+        if (eqIndex >= 0) {
+          key   = decodeURIComponent(part.substring(0, eqIndex));
+          value = decodeURIComponent(part.substring(eqIndex + 1));
+        } else {
+          key   = decodeURIComponent(part);
+          value = "";
+        }
+        params[key] = value;
+      }
+
+      function setField(paramName, elementId) {
+        if (!(paramName in params)) return;
+        const el = document.getElementById(elementId);
+        if (el) el.value = params[paramName];
+      }
+
+      // Uniquement ces trois champs Ã  l'ouverture
+      setField("visitId",     "visitId");
+      setField("No_Dossier",  "No_Dossier");
+      setField("Nom_Patiente","Nom_Patiente");
+    }
+
+    // Mettre Date_Exam Ã  aujourd'hui si vide
+    function setDefaultExamDateIfEmpty() {
+      const el = document.getElementById("Date_Exam");
+      if (!el) return;
+      if (!el.value) {
+        const today = new Date();
+        const yyyy = today.getFullYear();
+        const mm = String(today.getMonth() + 1).padStart(2, "0");
+        const dd = String(today.getDate()).padStart(2, "0");
+        el.value = `${yyyy}-${mm}-${dd}`;
+      }
+    }
+
+    // Construit le contenu TXT
+    function buildTxtContent(visitId) {
+      recalcAgeRef();
+
+      const vars = {};
+
+      vars["VisitId"] = document.getElementById("visitId").value.trim();
+      vars["No_Dossier"] = document.getElementById("No_Dossier").value.trim();
+
+      vars["Renseignements"] = document.getElementById("Renseignements").value.trim();
+      vars["Examen"] = document.getElementById("Examen").value.trim();
+      vars["Date_Exam"] = document.getElementById("Date_Exam").value.trim();
+
+      const dopplerFlag = document.getElementById('DopplerFlag').checked;
+      vars["Doppler"] = dopplerFlag ? "DOPPLER EVALUATION DE RETARD DE CROISSANCE" : "";
+
+      vars["G"] = document.getElementById("G").value.trim();
+      vars["P"] = document.getElementById("P").value.trim();
+      vars["A"] = document.getElementById("A").value.trim();
+
+      const w = document.getElementById("Age_Ref_Weeks").value.trim();
+      const d = document.getElementById("Age_Ref_Days").value.trim();
+      vars["Age_Ref"] = (w && d) ? (w + " sem " + d + " jrs") : "";
+
+      vars["DDM"] = document.getElementById("DDM").value.trim();
+      vars["DPA"] = document.getElementById("DPA").value.trim();
+
+      vars["Foetus_Nb"] = document.getElementById("Foetus_Nb").value.trim();
+      vars["Coeur_Foet"] = getRadioValue("Coeur_Foet");
+      vars["Mvt_Foet"] = getRadioValue("Mvt_Foet");
+      vars["Presentation"] = getRadioValue("Presentation");
+
+      vars["Mesure_BPD"] = addMmSuffix(document.getElementById("Mesure_BPD").value);
+      vars["Perc_BPD"] = addPercSuffix(document.getElementById("Perc_BPD").value);
+      vars["NbSem_BPD"] = formatWeeksDaysText(document.getElementById("NbSem_BPD").value);
+
+      vars["Mesure_CC"] = addMmSuffix(document.getElementById("Mesure_CC").value);
+      vars["Perc_CC"] = addPercSuffix(document.getElementById("Perc_CC").value);
+      vars["NbSem_CC"] = formatWeeksDaysText(document.getElementById("NbSem_CC").value);
+
+      vars["Mesure_FL"] = addMmSuffix(document.getElementById("Mesure_FL").value);
+      vars["Perc_FL"] = addPercSuffix(document.getElementById("Perc_FL").value);
+      vars["NbSem_FL"] = formatWeeksDaysText(document.getElementById("NbSem_FL").value);
+
+      vars["Mesure_Hum"] = addMmSuffix(document.getElementById("Mesure_Hum").value);
+      vars["Perc_Hum"] = addPercSuffix(document.getElementById("Perc_Hum").value);
+      vars["NbSem_Hum"] = formatWeeksDaysText(document.getElementById("NbSem_Hum").value);
+
+      vars["Mesure_AC"] = addMmSuffix(document.getElementById("Mesure_AC").value);
+      vars["Perc_AC"] = addPercSuffix(document.getElementById("Perc_AC").value);
+      vars["NbSem_AC"] = formatWeeksDaysText(document.getElementById("NbSem_AC").value);
+
+      vars["Liquide_Amnio"] = getRadioValue("Liquide_Amnio");
+      vars["Amnio_PPP"] = addCmSuffix(document.getElementById("Amnio_PPP").value);
+      vars["Placenta"] = getRadioValue("Placenta");
+      vars["Placenta_Loc"] = getPlacentaLocValue();
+      vars["Placenta_Grade"] = getRadioValue("Placenta_Grade");
+
+      vars["UA_PI"] = document.getElementById("UA_PI").value.trim();
+      vars["UA_Perc"] = addPercWithAgeRef(document.getElementById("UA_Perc").value, vars["Age_Ref"]);
+      vars["UA_Result"] = getRadioValue("UA_Result");
+
+      vars["MCA_PI"] = document.getElementById("MCA_PI").value.trim();
+      vars["MCA_Perc"] = addPercWithAgeRef(document.getElementById("MCA_Perc").value, vars["Age_Ref"]);
+      vars["MCA_Result"] = getRadioValue("MCA_Result");
+
+      vars["RCP"] = document.getElementById("RCP").value.trim();
+      vars["Ratio_CP_Perc"] = addPercWithAgeRef(document.getElementById("Ratio_CP_Perc").value, vars["Age_Ref"]);
+      vars["Ratio_CP_Result"] = getRadioValue("Ratio_CP_Result");
+
+      const ew = document.getElementById("Age_Echo_Weeks").value.trim();
+      const ed = document.getElementById("Age_Echo_Days").value.trim();
+      vars["Age_Echo"] = (ew && ed) ? (ew + " sem " + ed + " jrs") : "";
+
+      vars["Poids"] = addGramSuffix(document.getElementById("Poids").value);
+      vars["Perc"] = addPercWithAgeRef(document.getElementById("Perc").value, vars["Age_Ref"]);
+      vars["Remarques"] = document.getElementById("Remarques").value.trim();
+      vars["Notes_Technologue"] = document.getElementById("Notes_Technologue").value.trim();
+
+      const rows = document.querySelectorAll('tbody tr[data-code]');
+      rows.forEach(row => {
+        const code = row.getAttribute('data-code');
+        const normal = row.querySelector('.anatomie-normal').checked;
+        const vu = row.querySelector('.anatomie-vu').checked;
+        const nonvu = row.querySelector('.anatomie-nonvu').checked;
+
+        vars[code + "N"] = "";
+        vars[code + "V"] = "";
+        vars[code + "NV"] = "";
+
+        if (nonvu) {
+          vars[code + "NV"] = "X";
+        } else if (vu) {
+          vars[code + "V"] = "X";
+          if (normal) vars[code + "N"] = "X";
+        }
+      });
+
+      const orderedNames = [
+        "VisitId","No_Dossier",
+        "Renseignements","Examen","Date_Exam","Doppler",
+        "G","P","A","Age_Ref","DDM","DPA",
+        "Foetus_Nb","Coeur_Foet","Mvt_Foet","Presentation",
+        "Mesure_BPD","Perc_BPD","NbSem_BPD",
+        "Mesure_CC","Perc_CC","NbSem_CC",
+        "Mesure_FL","Perc_FL","NbSem_FL",
+        "Mesure_Hum","Perc_Hum","NbSem_Hum",
+        "Mesure_AC","Perc_AC","NbSem_AC",
+        "17N","17V","17NV",
+        "18N","18V","18NV",
+        "19N","19V","19NV",
+        "20N","20V","20NV",
+        "21N","21V","21NV",
+        "22N","22V","22NV",
+        "23N","23V","23NV",
+        "24N","24V","24NV",
+        "25N","25V","25NV",
+        "26N","26V","26NV",
+        "27N","27V","27NV",
+        "28N","28V","28NV",
+        "Liquide_Amnio","Amnio_PPP","Placenta","Placenta_Loc","Placenta_Grade",
+        "UA_PI","UA_Perc","UA_Result",
+        "MCA_PI","MCA_Perc","MCA_Result",
+        "RCP","Ratio_CP_Perc","Ratio_CP_Result",
+        "Age_Echo","Poids","Perc","Remarques","Notes_Technologue"
+      ];
+
+      const totalVars = orderedNames.length;
+
+      let now = new Date();
+      const pad = n => n.toString().padStart(2, "0");
+      const timestamp = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())} `
+                      + `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+
+      let content = "";
+      content += `OBST vars - ${timestamp}\r\n`;
+      content += `Total variables dans la map : ${totalVars}\r\n\r\n`;
+
+      orderedNames.forEach(name => {
+        const val = vars[name] ?? "";
+        content += `${name} = [${val}]\r\n`;
+      });
+
+      return content;
+    }
+
+    // Bouton TXT seulement
+    document.getElementById('saveTxtOnlyBtn').addEventListener('click', () => {
+      const visitIdRaw = document.getElementById('visitId').value.trim();
+      if (!visitIdRaw) {
+        alert("Veuillez entrer le numÃ©ro de visite.");
+        return;
+      }
+      const cleanVisitId = visitIdRaw.replace(/-/g, "");
+      const content = buildTxtContent(visitIdRaw);
+      const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `OBST_Data_${cleanVisitId}.txt`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    });
+
+    // Bouton TXT + HTML
+    document.getElementById('generateBtn').addEventListener('click', () => {
+      const visitIdRaw = document.getElementById('visitId').value.trim();
+      if (!visitIdRaw) {
+        alert("Veuillez entrer le numÃ©ro de visite.");
+        return;
+      }
+      const cleanVisitId = visitIdRaw.replace(/-/g, "");
+
+      const content = buildTxtContent(visitIdRaw);
+      const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `OBST_Data_${cleanVisitId}.txt`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      syncFormToAttributes();
+      const htmlText = document.documentElement.outerHTML;
+      const htmlBlob = new Blob([htmlText], { type: "text/html;charset=utf-8" });
+      const htmlUrl = URL.createObjectURL(htmlBlob);
+
+      const aHtml = document.createElement('a');
+      aHtml.href = htmlUrl;
+      aHtml.download = `OBST_Data_${cleanVisitId}.html`;
+      document.body.appendChild(aHtml);
+      aHtml.click();
+      document.body.removeChild(aHtml);
+      URL.revokeObjectURL(htmlUrl);
+    });
+
+    // Init : prÃ©remplir depuis URL, mettre Date_Exam si vide, puis calculer Age_Ref
+    prefillFromUrl();
+    setDefaultExamDateIfEmpty();
+    recalcAgeRef();
+  
+    // Values injected from SR-XML
+    (function setDefaultsFromXml(){
+      const setSel = (id, val) => { const el = document.getElementById(id); if (el) el.value = String(val); };
+      setSel("Age_Echo_Weeks", "34");
+      setSel("Age_Ref_Days", "1");
+      setSel("Age_Ref_Weeks", "33");
+      setSel("Age_Echo_Days", "2");
+    })();
+</script>
+</body>
+</html>
+

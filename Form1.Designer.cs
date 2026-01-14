@@ -35,7 +35,9 @@ namespace RadEdit
             toolStripUnderlineButton = new ToolStripButton();
             toolStripItalicButton = new ToolStripButton();
             richTextBox1 = new RichTextBox();
+            webView2 = new Microsoft.Web.WebView2.WinForms.WebView2();
             toolStrip1.SuspendLayout();
+            ((System.ComponentModel.ISupportInitialize)webView2).BeginInit();
             SuspendLayout();
             // 
             // toolStrip1
@@ -115,17 +117,32 @@ namespace RadEdit
             richTextBox1.TabIndex = 1;
             richTextBox1.Text = "";
             // 
+            // webView2
+            // 
+            webView2.AllowExternalDrop = true;
+            webView2.CreationProperties = null;
+            webView2.DefaultBackgroundColor = Color.White;
+            webView2.Dock = DockStyle.Fill;
+            webView2.Location = new Point(0, 27);
+            webView2.Name = "webView2";
+            webView2.Size = new Size(800, 423);
+            webView2.TabIndex = 2;
+            webView2.Visible = false;
+            webView2.ZoomFactor = 1D;
+            // 
             // Form1
             // 
             AutoScaleDimensions = new SizeF(7F, 15F);
             AutoScaleMode = AutoScaleMode.Font;
             ClientSize = new Size(800, 450);
+            Controls.Add(webView2);
             Controls.Add(richTextBox1);
             Controls.Add(toolStrip1);
             Name = "Form1";
             Text = "RadEdit";
             toolStrip1.ResumeLayout(false);
             toolStrip1.PerformLayout();
+            ((System.ComponentModel.ISupportInitialize)webView2).EndInit();
             ResumeLayout(false);
             PerformLayout();
         }
@@ -139,5 +156,6 @@ namespace RadEdit
         private ToolStripButton toolStripUnderlineButton;
         private ToolStripButton toolStripItalicButton;
         private RichTextBox richTextBox1;
+        private Microsoft.Web.WebView2.WinForms.WebView2 webView2;
     }
 }
