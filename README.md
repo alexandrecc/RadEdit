@@ -116,6 +116,29 @@ SendCopyData(hwnd, command, text := "") {
 }
 ```
 
+## HTML to RTF Routing
+
+When HTML mode is active, form fields can push text into hidden regions in the RTF. Define the region in the RTF with hidden markers:
+
+```
+{\v [[BEGIN:PE_RULE]]}
+(auto)
+{\v [[END:PE_RULE]]}
+```
+
+Then add `data-target-region` in the HTML. When the field changes, RadEdit replaces the text between the markers with the mapped text or the raw value.
+
+```
+<select data-field="PE_PRESENT"
+        data-target-region="PE_RULE"
+        data-map='{"yes":"Pulmonary embolism is present.","no":"No pulmonary embolism."}'>
+  <option value="no">No</option>
+  <option value="yes">Yes</option>
+</select>
+```
+
+Checkboxes can use `data-map` with `true`/`false` keys. A working demo lives in `examples\html-routing-demo.html`, `examples\html-routing-demo.rtf`, and `examples\html-routing-demo.ahk`.
+
 ## Troubleshooting
 
 - **SetRtf/InsertRtf fails silently**: ensure the payload is valid RTF (e.g., starts with `{\rtf`).

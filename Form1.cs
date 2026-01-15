@@ -36,6 +36,125 @@ namespace RadEdit
         }
 
         private const int WM_COPYDATA = 0x004A;
+        private const string HtmlRegionMessageType = "regionUpdate";
+        private static readonly JsonSerializerOptions HtmlMessageJsonOptions = new()
+        {
+            PropertyNameCaseInsensitive = true
+        };
+        private static readonly object DebugLogLock = new();
+        private static readonly string DebugLogPath = InitializeDebugLogPath();
+        private const string HtmlRoutingScript = @"(() => {
+    if (window.__radeditRoutingAttached) {
+        return;
+    }
+    window.__radeditRoutingAttached = true;
+
+    const send = (payload) => {
+        if (window.chrome && window.chrome.webview) {
+            window.chrome.webview.postMessage(payload);
+        }
+    };
+
+    const parseMap = (el) => {
+        if (!el) return null;
+        const raw = el.getAttribute('data-map');
+        if (!raw) return null;
+        try {
+            const parsed = JSON.parse(raw);
+            return parsed && typeof parsed === 'object' ? parsed : null;
+        } catch (err) {
+            return null;
+        }
+    };
+
+    const getValue = (el) => {
+        if (!el || !el.tagName) return '';
+        const tag = el.tagName.toLowerCase();
+        if (tag === 'select') {
+            const opt = el.options[el.selectedIndex];
+            if (!opt) return '';
+            return opt.value || opt.text || '';
+        }
+        if (tag === 'textarea') {
+            return el.value || '';
+        }
+        if (tag === 'input') {
+            const type = (el.getAttribute('type') || 'text').toLowerCase();
+            if (type === 'checkbox') {
+                return el.checked ? (el.value || 'true') : '';
+            }
+            if (type === 'radio') {
+                return el.checked ? (el.value || '') : '';
+            }
+            return el.value || '';
+        }
+        return '';
+    };
+
+    const resolveText = (el, value, map) => {
+        if (!map) return value || '';
+        if (Object.prototype.hasOwnProperty.call(map, value)) {
+            return map[value];
+        }
+        if (typeof value === 'string') {
+            const lower = value.toLowerCase();
+            if (Object.prototype.hasOwnProperty.call(map, lower)) {
+                return map[lower];
+            }
+        }
+        if (el && el.tagName && el.tagName.toLowerCase() === 'input') {
+            const type = (el.getAttribute('type') || 'text').toLowerCase();
+            if (type === 'checkbox') {
+                const stateKey = el.checked ? 'true' : 'false';
+                if (Object.prototype.hasOwnProperty.call(map, stateKey)) {
+                    return map[stateKey];
+                }
+            }
+        }
+        return value || '';
+    };
+
+    const handleEvent = (ev) => {
+        const target = ev.target;
+        if (!target || !target.closest) return;
+
+        const regionEl = target.closest('[data-target-region]');
+        if (!regionEl) return;
+
+        const region = regionEl.getAttribute('data-target-region');
+        if (!region) return;
+
+        const control = regionEl.matches('input, select, textarea') ? regionEl : target;
+        if (control.matches && control.matches('input[type=radio]') && !control.checked) {
+            return;
+        }
+
+        const field = regionEl.getAttribute('data-field') || control.getAttribute('data-field') || '';
+        const map = parseMap(regionEl) || parseMap(control);
+        const value = getValue(control);
+        const text = resolveText(control, value, map);
+
+        send({
+            type: 'regionUpdate',
+            region: region,
+            field: field,
+            value: value,
+            text: text
+        });
+    };
+
+    document.addEventListener('change', handleEvent, true);
+    document.addEventListener('input', handleEvent, true);
+})();";
+
+        private sealed class HtmlRegionUpdate
+        {
+            public string? Type { get; set; }
+            public string? Region { get; set; }
+            public string? Field { get; set; }
+            public string? Value { get; set; }
+            public string? Text { get; set; }
+        }
 
         private static class RichEditNative
         {
@@ -430,6 +549,13 @@ namespace RadEdit
 
             var environment = await CoreWebView2Environment.CreateAsync(null, null, options);
             await webView2.EnsureCoreWebView2Async(environment);
+            if (webView2.CoreWebView2 != null)
+            {
+                webView2.CoreWebView2.Settings.IsWebMessageEnabled = true;
+                webView2.CoreWebView2.WebMessageReceived += WebView2_WebMessageReceived;
+                await webView2.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(HtmlRoutingScript);
+                LogDebug("WebView2 initialized. Routing script injected.");
+            }
         }
 
         private async Task<string> ExportHtmlAsync()
@@ -482,6 +608,45 @@ namespace RadEdit
             }
 
             return html;
+        }
+
+        private void WebView2_WebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
+        {
+            LogDebug("Web message received: " + e.WebMessageAsJson);
+            HtmlRegionUpdate? message;
+            try
+            {
+                message = JsonSerializer.Deserialize<HtmlRegionUpdate>(e.WebMessageAsJson, HtmlMessageJsonOptions);
+            }
+            catch (JsonException)
+            {
+                LogDebug("Web message JSON failed to parse.");
+                return;
+            }
+
+            if (message == null ||
+                !string.Equals(message.Type, HtmlRegionMessageType, StringComparison.OrdinalIgnoreCase))
+            {
+                LogDebug("Web message ignored. Type=" + (message?.Type ?? "<null>"));
+                return;
+            }
+
+            string region = message.Region?.Trim() ?? string.Empty;
+            if (string.IsNullOrEmpty(region))
+            {
+                LogDebug("Web message missing region.");
+                return;
+            }
+
+            string text = message.Text ?? string.Empty;
+            LogDebug("Routing update. Region=" + region + " TextLength=" + text.Length);
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(() => TryUpdateRtfRegion(region, text)));
+                return;
+            }
+
+            TryUpdateRtfRegion(region, text);
         }
 
         private void SetHtmlMode(bool enable)
@@ -841,6 +1006,303 @@ namespace RadEdit
                 break;
             }
             return i;
+        }
+
+        private bool TryUpdateRtfRegion(string regionName, string? replacementText)
+        {
+            if (string.IsNullOrWhiteSpace(regionName))
+            {
+                LogDebug("TryUpdateRtfRegion skipped: empty region.");
+                return false;
+            }
+
+            if (TryUpdateRegionByText(regionName, replacementText))
+            {
+                return true;
+            }
+
+            string rtf = richTextBox1.Rtf ?? string.Empty;
+            string trimmedRegion = regionName.Trim();
+            string beginMarker = "[[BEGIN:" + trimmedRegion + "]]";
+            string endMarker = "[[END:" + trimmedRegion + "]]";
+            string replacementRtf = EscapeRtfText(replacementText ?? string.Empty);
+
+            int searchIndex = 0;
+            bool replacedAny = false;
+            var builder = new StringBuilder(rtf.Length + replacementRtf.Length);
+
+            while (true)
+            {
+                int beginMarkerIndex = rtf.IndexOf(beginMarker, searchIndex, StringComparison.Ordinal);
+                if (beginMarkerIndex < 0)
+                {
+                    break;
+                }
+
+                int endMarkerIndex = rtf.IndexOf(endMarker, beginMarkerIndex + beginMarker.Length, StringComparison.Ordinal);
+                if (endMarkerIndex < 0)
+                {
+                    break;
+                }
+
+                if (!TryFindGroupBounds(rtf, beginMarkerIndex, out int beginGroupStart, out int beginGroupEnd) ||
+                    !TryFindGroupBounds(rtf, endMarkerIndex, out int endGroupStart, out int endGroupEnd))
+                {
+                    LogDebug("Failed to resolve group bounds for region: " + trimmedRegion);
+                    break;
+                }
+
+                int replaceStart = beginGroupEnd + 1;
+                int replaceEnd = endGroupStart;
+                if (replaceStart > replaceEnd)
+                {
+                    LogDebug("Invalid region span for: " + trimmedRegion);
+                    break;
+                }
+
+                builder.Append(rtf, searchIndex, replaceStart - searchIndex);
+                builder.Append(replacementRtf);
+                searchIndex = replaceEnd;
+                replacedAny = true;
+            }
+
+            if (!replacedAny)
+            {
+                bool beginExists = rtf.IndexOf(beginMarker, StringComparison.Ordinal) >= 0;
+                bool endExists = rtf.IndexOf(endMarker, StringComparison.Ordinal) >= 0;
+                LogDebug("Region markers not found for: " + trimmedRegion +
+                         " Begin=" + beginExists + " End=" + endExists);
+                return false;
+            }
+
+            builder.Append(rtf, searchIndex, rtf.Length - searchIndex);
+            string updatedRtf = builder.ToString();
+
+            RunProgrammaticRtfUpdate(() => richTextBox1.Rtf = updatedRtf);
+            LogDebug("Region updated: " + trimmedRegion);
+            return true;
+        }
+
+        private bool TryUpdateRegionByText(string regionName, string? replacementText)
+        {
+            string trimmedRegion = regionName.Trim();
+            string beginMarker = "[[BEGIN:" + trimmedRegion + "]]";
+            string endMarker = "[[END:" + trimmedRegion + "]]";
+            string text = richTextBox1.Text ?? string.Empty;
+
+            int beginIndex = text.IndexOf(beginMarker, StringComparison.Ordinal);
+            if (beginIndex < 0)
+            {
+                LogDebug("Begin marker not found in Text for: " + trimmedRegion);
+                return false;
+            }
+
+            int start = beginIndex + beginMarker.Length;
+            int endIndex = text.IndexOf(endMarker, start, StringComparison.Ordinal);
+            if (endIndex < 0)
+            {
+                LogDebug("End marker not found in Text for: " + trimmedRegion);
+                return false;
+            }
+
+            if (endIndex < start)
+            {
+                LogDebug("Invalid Text span for: " + trimmedRegion);
+                return false;
+            }
+
+            string replacement = replacementText ?? string.Empty;
+            RunProgrammaticRtfUpdate(() => ReplaceTextRange(start, endIndex - start, replacement));
+            LogDebug("Region updated via Text: " + trimmedRegion);
+            return true;
+        }
+
+        private void ReplaceTextRange(int start, int length, string replacement)
+        {
+            int selStart = richTextBox1.SelectionStart;
+            int selLength = richTextBox1.SelectionLength;
+
+            richTextBox1.SelectionStart = start;
+            richTextBox1.SelectionLength = length;
+            richTextBox1.SelectedText = replacement;
+
+            try
+            {
+                richTextBox1.SelectionStart = Math.Min(selStart, richTextBox1.TextLength);
+                richTextBox1.SelectionLength = selLength;
+            }
+            catch
+            {
+                // Selection restore is best-effort.
+            }
+        }
+
+        private static string EscapeRtfText(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                return string.Empty;
+            }
+
+            string normalized = text.Replace("\r\n", "\n").Replace('\r', '\n');
+            var builder = new StringBuilder(normalized.Length);
+
+            foreach (char c in normalized)
+            {
+                switch (c)
+                {
+                    case '\\':
+                        builder.Append(@"\\");
+                        break;
+                    case '{':
+                        builder.Append(@"\{");
+                        break;
+                    case '}':
+                        builder.Append(@"\}");
+                        break;
+                    case '\n':
+                        builder.Append(@"\par ");
+                        break;
+                    case '\t':
+                        builder.Append(@"\tab ");
+                        break;
+                    default:
+                        if (c <= 0x7f)
+                        {
+                            builder.Append(c);
+                        }
+                        else
+                        {
+                            builder.Append(@"\u").Append((int)c).Append('?');
+                        }
+                        break;
+                }
+            }
+
+            return builder.ToString();
+        }
+
+        private static bool TryFindGroupBounds(string rtf, int index, out int groupStart, out int groupEnd)
+        {
+            groupStart = -1;
+            groupEnd = -1;
+
+            if (index < 0 || index >= rtf.Length)
+            {
+                return false;
+            }
+
+            int depth = 0;
+            for (int i = index; i >= 0; i--)
+            {
+                char c = rtf[i];
+                if (IsRtfEscaped(rtf, i))
+                {
+                    continue;
+                }
+
+                if (c == '}')
+                {
+                    depth++;
+                }
+                else if (c == '{')
+                {
+                    if (depth == 0)
+                    {
+                        groupStart = i;
+                        break;
+                    }
+
+                    depth--;
+                }
+            }
+
+            if (groupStart < 0)
+            {
+                return false;
+            }
+
+            depth = 0;
+            for (int i = groupStart; i < rtf.Length; i++)
+            {
+                char c = rtf[i];
+                if (IsRtfEscaped(rtf, i))
+                {
+                    continue;
+                }
+
+                if (c == '{')
+                {
+                    depth++;
+                }
+                else if (c == '}')
+                {
+                    depth--;
+                    if (depth == 0)
+                    {
+                        groupEnd = i;
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private static bool IsRtfEscaped(string rtf, int index)
+        {
+            int slashCount = 0;
+            for (int i = index - 1; i >= 0 && rtf[i] == '\\'; i--)
+            {
+                slashCount++;
+            }
+
+            return (slashCount % 2) == 1;
+        }
+
+        private static string InitializeDebugLogPath()
+        {
+            string cwd = Environment.CurrentDirectory;
+            string? dir = FindLogDirectory(cwd);
+            if (string.IsNullOrEmpty(dir))
+            {
+                dir = cwd;
+            }
+
+            return Path.Combine(dir, "html-routing-debug.log");
+        }
+
+        private static string? FindLogDirectory(string start)
+        {
+            var current = new DirectoryInfo(start);
+            for (int i = 0; i < 6 && current != null; i++)
+            {
+                string examples = Path.Combine(current.FullName, "examples");
+                if (Directory.Exists(examples))
+                {
+                    return examples;
+                }
+
+                current = current.Parent;
+            }
+
+            return null;
+        }
+
+        private static void LogDebug(string message)
+        {
+            try
+            {
+                string line = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " " + message + Environment.NewLine;
+                lock (DebugLogLock)
+                {
+                    File.AppendAllText(DebugLogPath, line);
+                }
+            }
+            catch
+            {
+                // Best-effort logging only.
+            }
         }
        
         private void ToolStripBoldButton_Click(object? sender, EventArgs e)
