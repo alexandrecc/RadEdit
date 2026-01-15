@@ -28,12 +28,57 @@ namespace RadEdit
             GetName = 12,
             NameResponse = 13,
             GotoEnd = 14,
-            SetHtmlFile = 15,
-            RequestHtmlFile = 16,
-            HtmlFileResponse = 17
+            FixFont = 15,
+            CleanUpEnd = 16,
+            SetHtmlFile = 17,
+            RequestHtmlFile = 18,
+            HtmlFileResponse = 19
         }
 
         private const int WM_COPYDATA = 0x004A;
+
+        private static class RichEditNative
+        {
+            public const int WM_USER = 0x0400;
+            public const int EM_SETCHARFORMAT = WM_USER + 68; // 0x0444
+            public const int SCF_DEFAULT = 0x0000;
+            public const int SCF_ALL = 0x0004;
+            public const uint CFM_SIZE = 0x80000000;
+            public const uint CFM_FACE = 0x20000000;
+            public const uint CFM_CHARSET = 0x08000000;
+            public const byte DEFAULT_CHARSET = 1;
+
+            [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+            public struct CHARFORMAT2W
+            {
+                public uint cbSize;
+                public uint dwMask;
+                public uint dwEffects;
+                public int yHeight;
+                public int yOffset;
+                public int crTextColor;
+                public byte bCharSet;
+                public byte bPitchAndFamily;
+                [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+                public string szFaceName;
+                public ushort wWeight;
+                public ushort sSpacing;
+                public int crBackColor;
+                public int lcid;
+                public int dwReserved;
+                public short sStyle;
+                public short wKerning;
+                public byte bUnderlineType;
+                public byte bAnimation;
+                public byte bRevAuthor;
+                public byte bReserved1;
+            }
+
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+            public static extern IntPtr SendMessage(
+                IntPtr hWnd, int msg, IntPtr wParam, ref CHARFORMAT2W lParam);
+        }
+
         private const string HtmlHostName = "radedit.local";
         private const string HtmlLanguage = "fr-CA";
         private Task? webView2Initialization;
@@ -41,12 +86,21 @@ namespace RadEdit
         private bool isHtmlMode;
         private string lastPlainText = string.Empty;
         private readonly SemaphoreSlim htmlInsertGate = new(1, 1);
+        private Form? detachedHtmlHost;
+        private Form? detachedRtfHost;
+        private bool isClosing;
+        private string lastRtfSnapshot = string.Empty;
+        private bool suppressRtfEvents;
+        private bool allowRtfUpdatesWhileHtmlFocus;
 
         public Form1()
         {
             InitializeComponent();
+            SetDefaultTypingFont("Arial", 10f);
             richTextBox1.SelectionChanged += RichTextBox1_SelectionChanged;
             richTextBox1.TextChanged += RichTextBox1_TextChanged;
+            lastPlainText = richTextBox1.Text;
+            lastRtfSnapshot = richTextBox1.Rtf ?? string.Empty;
             UpdateFormattingButtons();
             SetHtmlMode(false);
         }
@@ -112,6 +166,10 @@ namespace RadEdit
                     return TrySendName(senderHandle);
                 case CopyDataCommand.GotoEnd:
                     return TryGotoEnd();
+                case CopyDataCommand.FixFont:
+                    return TryFixFontCommand(payload);
+                case CopyDataCommand.CleanUpEnd:
+                    return TryCleanUpEnd();
                 default:
                     NativeMethods.SendCopyData(senderHandle, CopyDataCommand.ErrorResponse, "Unknown command.");
                     return false;
@@ -121,13 +179,16 @@ namespace RadEdit
         private bool TrySetRtf(string? rtf)
         {
             SetHtmlMode(false);
-            if (string.IsNullOrEmpty(rtf))
+            RunProgrammaticRtfUpdate(() =>
             {
-                richTextBox1.Clear();
-                return true;
-            }
+                if (string.IsNullOrEmpty(rtf))
+                {
+                    richTextBox1.Clear();
+                    return;
+                }
 
-            richTextBox1.Rtf = rtf;
+                richTextBox1.Rtf = rtf;
+            });
             return true;
         }
 
@@ -139,7 +200,7 @@ namespace RadEdit
                 return false;
             }
 
-            richTextBox1.SelectedRtf = rtf;
+            RunProgrammaticRtfUpdate(() => richTextBox1.SelectedRtf = rtf);
             return true;
         }
 
@@ -159,13 +220,13 @@ namespace RadEdit
 
             if (replaceContent)
             {
-                richTextBox1.LoadFile(fullPath, RichTextBoxStreamType.RichText);
+                RunProgrammaticRtfUpdate(() => richTextBox1.LoadFile(fullPath, RichTextBoxStreamType.RichText));
             }
             else
             {
                 using var buffer = new RichTextBox();
                 buffer.LoadFile(fullPath, RichTextBoxStreamType.RichText);
-                richTextBox1.SelectedRtf = buffer.Rtf;
+                RunProgrammaticRtfUpdate(() => richTextBox1.SelectedRtf = buffer.Rtf);
             }
 
             return true;
@@ -259,7 +320,8 @@ namespace RadEdit
                 {
                     if (!isHtmlMode)
                     {
-                        NativeMethods.SendCopyData(recipient, CopyDataCommand.ErrorResponse, "HTML mode is not active.");
+                        string tempRtfPath = CreateTempRtfFile(requestedPath);
+                        NativeMethods.SendCopyData(recipient, CopyDataCommand.TempFileResponse, tempRtfPath);
                         return;
                     }
 
@@ -431,35 +493,29 @@ namespace RadEdit
 
             isHtmlMode = enable;
             lastPlainText = richTextBox1.Text;
-            richTextBox1.Visible = !enable;
-            webView2.Visible = enable;
 
             toolStripBoldButton.Enabled = !enable;
             toolStripItalicButton.Enabled = !enable;
             toolStripUnderlineButton.Enabled = !enable;
-
-            if (enable)
-            {
-                webView2.BringToFront();
-            }
-            else
-            {
-                richTextBox1.BringToFront();
-            }
         }
 
         private async void RichTextBox1_TextChanged(object? sender, EventArgs e)
         {
+            if (suppressRtfEvents)
+            {
+                return;
+            }
+
             string newText = richTextBox1.Text;
 
-            if (!isHtmlMode)
+            if (allowRtfUpdatesWhileHtmlFocus || !IsHtmlMirroringAvailable())
             {
                 lastPlainText = newText;
+                lastRtfSnapshot = richTextBox1.Rtf ?? string.Empty;
                 return;
             }
 
             string inserted = ExtractInsertedText(lastPlainText, newText);
-            lastPlainText = newText;
 
             if (string.IsNullOrEmpty(inserted))
             {
@@ -473,6 +529,19 @@ namespace RadEdit
             catch
             {
                 // Swallow to avoid disrupting the UI if the WebView is not ready.
+            }
+
+            suppressRtfEvents = true;
+            try
+            {
+                if (!string.Equals(richTextBox1.Rtf, lastRtfSnapshot, StringComparison.Ordinal))
+                {
+                    richTextBox1.Rtf = lastRtfSnapshot;
+                }
+            }
+            finally
+            {
+                suppressRtfEvents = false;
             }
         }
 
@@ -514,7 +583,7 @@ namespace RadEdit
 
         private async Task SendTextToHtmlAsync(string text)
         {
-            if (!isHtmlMode || string.IsNullOrEmpty(text))
+            if (string.IsNullOrEmpty(text) || !IsHtmlMirroringAvailable())
             {
                 return;
             }
@@ -569,6 +638,25 @@ namespace RadEdit
             }
         }
 
+        private bool IsHtmlMirroringAvailable()
+        {
+            return webView2.Source != null && webView2.ContainsFocus;
+        }
+
+        private void RunProgrammaticRtfUpdate(Action action)
+        {
+            bool previous = allowRtfUpdatesWhileHtmlFocus;
+            allowRtfUpdatesWhileHtmlFocus = true;
+            try
+            {
+                action();
+            }
+            finally
+            {
+                allowRtfUpdatesWhileHtmlFocus = previous;
+            }
+        }
+
         private bool TrySetTitle(string? title)
         {
             string sanitized = title?.Trim() ?? string.Empty;
@@ -615,6 +703,145 @@ namespace RadEdit
             richTextBox1.Focus();
             return true;
         }
+
+        private void SetDefaultTypingFont(string face = "Arial", float sizePt = 10f)
+        {
+            var cf = new RichEditNative.CHARFORMAT2W
+            {
+                cbSize = (uint)Marshal.SizeOf<RichEditNative.CHARFORMAT2W>(),
+                dwMask = RichEditNative.CFM_FACE | RichEditNative.CFM_SIZE | RichEditNative.CFM_CHARSET,
+                szFaceName = string.IsNullOrWhiteSpace(face) ? "Arial" : face,
+                yHeight = (int)Math.Round(sizePt * 20f),
+                bCharSet = RichEditNative.DEFAULT_CHARSET
+            };
+
+            RichEditNative.SendMessage(
+                richTextBox1.Handle,
+                RichEditNative.EM_SETCHARFORMAT,
+                (IntPtr)RichEditNative.SCF_DEFAULT,
+                ref cf
+            );
+
+            richTextBox1.Font = new Font(face, sizePt, FontStyle.Regular, GraphicsUnit.Point);
+        }
+
+        private bool TryFixFontCommand(string? payload)
+        {
+            SetHtmlMode(false);
+
+            string face = "Arial";
+            float size = 10f;
+
+            if (!string.IsNullOrWhiteSpace(payload))
+            {
+                var p = payload.Trim();
+                var parts = p.Split(new[] { ';', ',', '|' }, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length == 1)
+                {
+                    if (float.TryParse(
+                            parts[0].Trim().Replace(',', '.'),
+                            System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture,
+                            out float s))
+                    {
+                        size = s;
+                    }
+                    else
+                    {
+                        face = parts[0].Trim();
+                    }
+                }
+                else
+                {
+                    face = string.IsNullOrWhiteSpace(parts[0]) ? "Arial" : parts[0].Trim();
+                    if (float.TryParse(
+                            parts[1].Trim().Replace(',', '.'),
+                            System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture,
+                            out float s))
+                    {
+                        size = s;
+                    }
+                }
+            }
+
+            RunProgrammaticRtfUpdate(() =>
+            {
+                var cf = new RichEditNative.CHARFORMAT2W
+                {
+                    cbSize = (uint)Marshal.SizeOf<RichEditNative.CHARFORMAT2W>(),
+                    dwMask = RichEditNative.CFM_FACE | RichEditNative.CFM_SIZE | RichEditNative.CFM_CHARSET,
+                    szFaceName = string.IsNullOrWhiteSpace(face) ? "Arial" : face,
+                    yHeight = (int)Math.Round(size * 20f),
+                    bCharSet = RichEditNative.DEFAULT_CHARSET
+                };
+
+                int selStart = richTextBox1.SelectionStart;
+                int selLen = richTextBox1.SelectionLength;
+
+                RichEditNative.SendMessage(
+                    richTextBox1.Handle,
+                    RichEditNative.EM_SETCHARFORMAT,
+                    (IntPtr)RichEditNative.SCF_ALL,
+                    ref cf
+                );
+
+                try
+                {
+                    richTextBox1.Select(selStart, selLen);
+                    richTextBox1.ScrollToCaret();
+                }
+                catch
+                {
+                    // Selection restore is best-effort.
+                }
+            });
+
+            return true;
+        }
+
+        private bool TryCleanUpEnd()
+        {
+            SetHtmlMode(false);
+            string txt = richTextBox1.Text;
+            if (string.IsNullOrEmpty(txt))
+            {
+                return true;
+            }
+
+            int newLen = TrimmedLength(txt);
+            if (newLen < txt.Length)
+            {
+                int toRemove = txt.Length - newLen;
+                RunProgrammaticRtfUpdate(() =>
+                {
+                    richTextBox1.SelectionStart = newLen;
+                    richTextBox1.SelectionLength = toRemove;
+                    richTextBox1.SelectedText = string.Empty;
+                    richTextBox1.SelectionStart = newLen;
+                    richTextBox1.SelectionLength = 0;
+                    richTextBox1.ScrollToCaret();
+                });
+            }
+
+            return true;
+        }
+
+        private static int TrimmedLength(string s)
+        {
+            int i = s.Length;
+            while (i > 0)
+            {
+                char c = s[i - 1];
+                if (c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\u00A0')
+                {
+                    i--;
+                    continue;
+                }
+                break;
+            }
+            return i;
+        }
        
         private void ToolStripBoldButton_Click(object? sender, EventArgs e)
         {
@@ -629,6 +856,16 @@ namespace RadEdit
         private void ToolStripUnderlineButton_Click(object? sender, EventArgs e)
         {
             ApplySelectionStyle(FontStyle.Underline, toolStripUnderlineButton.CheckState != CheckState.Checked);
+        }
+
+        private void ToolStripPopHtmlButton_Click(object? sender, EventArgs e)
+        {
+            ToggleWebViewDocking();
+        }
+
+        private void ToolStripPopRtfButton_Click(object? sender, EventArgs e)
+        {
+            ToggleRichTextDocking();
         }
 
         private void RichTextBox1_SelectionChanged(object? sender, EventArgs e)
@@ -666,6 +903,141 @@ namespace RadEdit
                 button.Checked = isSet;
                 button.CheckState = isSet ? CheckState.Checked : CheckState.Unchecked;
             }
+        }
+
+        private void ToggleWebViewDocking()
+        {
+            if (IsControlDetached(webView2, detachedHtmlHost))
+            {
+                DockWebView2();
+            }
+            else
+            {
+                DetachWebView2();
+            }
+        }
+
+        private void ToggleRichTextDocking()
+        {
+            if (IsControlDetached(richTextBox1, detachedRtfHost))
+            {
+                DockRichTextBox();
+            }
+            else
+            {
+                DetachRichTextBox();
+            }
+        }
+
+        private void DetachWebView2()
+        {
+            if (detachedHtmlHost == null)
+            {
+                detachedHtmlHost = CreateDetachedHost("HTML View", DetachedHtmlHost_FormClosing);
+            }
+
+            MoveControl(webView2, detachedHtmlHost);
+            detachedHtmlHost.Show(this);
+            detachedHtmlHost.BringToFront();
+            toolStripPopHtmlButton.Text = "Dock HTML";
+        }
+
+        private void DockWebView2()
+        {
+            if (detachedHtmlHost == null)
+            {
+                return;
+            }
+
+            MoveControl(webView2, splitContainer1.Panel2);
+            detachedHtmlHost.Hide();
+            toolStripPopHtmlButton.Text = "Pop HTML";
+        }
+
+        private void DetachRichTextBox()
+        {
+            if (detachedRtfHost == null)
+            {
+                detachedRtfHost = CreateDetachedHost("Rich Text View", DetachedRtfHost_FormClosing);
+            }
+
+            MoveControl(richTextBox1, detachedRtfHost);
+            detachedRtfHost.Show(this);
+            detachedRtfHost.BringToFront();
+            toolStripPopRtfButton.Text = "Dock RTF";
+        }
+
+        private void DockRichTextBox()
+        {
+            if (detachedRtfHost == null)
+            {
+                return;
+            }
+
+            MoveControl(richTextBox1, splitContainer1.Panel1);
+            detachedRtfHost.Hide();
+            toolStripPopRtfButton.Text = "Pop RTF";
+        }
+
+        private Form CreateDetachedHost(string title, FormClosingEventHandler closingHandler)
+        {
+            var host = new Form
+            {
+                Text = title,
+                StartPosition = FormStartPosition.Manual,
+                Size = new Size(700, 500),
+                ShowInTaskbar = true,
+                Owner = this
+            };
+
+            host.FormClosing += closingHandler;
+            return host;
+        }
+
+        private void DetachedHtmlHost_FormClosing(object? sender, FormClosingEventArgs e)
+        {
+            if (isClosing)
+            {
+                return;
+            }
+
+            e.Cancel = true;
+            DockWebView2();
+        }
+
+        private void DetachedRtfHost_FormClosing(object? sender, FormClosingEventArgs e)
+        {
+            if (isClosing)
+            {
+                return;
+            }
+
+            e.Cancel = true;
+            DockRichTextBox();
+        }
+
+        private static void MoveControl(Control control, Control destination)
+        {
+            if (control.Parent != null)
+            {
+                control.Parent.Controls.Remove(control);
+            }
+
+            destination.Controls.Add(control);
+            control.Dock = DockStyle.Fill;
+        }
+
+        private static bool IsControlDetached(Control control, Form? host)
+        {
+            return host != null && control.Parent == host;
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            isClosing = true;
+            detachedHtmlHost?.Close();
+            detachedRtfHost?.Close();
+            base.OnFormClosing(e);
         }
 
         private static string SanitizeFileName(string? name)

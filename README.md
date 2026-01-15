@@ -54,9 +54,11 @@ RadEdit listens for `WM_COPYDATA` messages whose `dwData` matches one of the fol
 | `GetName` | 12 | *(ignored)* | RadEdit responds with `NameResponse` containing the current name. |
 | `NameResponse` | 13 | Name text | Response emitted for `GetName`. |
 | `GotoEnd` | 14 | *(ignored)* | Moves the caret to the end of the document (ignores trailing whitespace) and scrolls into view. |
-| `SetHtmlFile` | 15 | File path | Loads the HTML file in WebView2 and switches the UI into HTML mode. |
-| `RequestHtmlFile` | 16 | Optional path or filename | Exports the current DOM (including filled form values) to an HTML file and returns the absolute path via `HtmlFileResponse`. Uses the same `%TEMP%`/absolute path rules as `RequestTempFile`. |
-| `HtmlFileResponse` | 17 | File path | Response emitted by RadEdit for `RequestHtmlFile`. |
+| `FixFont` | 15 | Optional font name, size, or `name;size` | Applies a font face/size to the entire document. Empty payload defaults to Arial 10. |
+| `CleanUpEnd` | 16 | *(ignored)* | Trims trailing whitespace at the end of the document. |
+| `SetHtmlFile` | 17 | File path | Loads the HTML file in WebView2 and switches the UI into HTML mode. |
+| `RequestHtmlFile` | 18 | Optional path or filename | Exports the current DOM (including filled form values) to an HTML file and returns the absolute path via `HtmlFileResponse`. Uses the same `%TEMP%`/absolute path rules as `RequestTempFile`. If HTML mode is not active, RadEdit falls back to `RequestTempFile` behavior and emits `TempFileResponse`. |
+| `HtmlFileResponse` | 19 | File path | Response emitted by RadEdit for `RequestHtmlFile`. |
 
 > **Note**: RadEdit does not currently emit responses for commands other than `RequestTempFile`/`RequestHtmlFile`/`GetTitle`/`GetName`, but callers should always check for an `ErrorResponse` to surface issues.
 
@@ -66,7 +68,8 @@ RadEdit listens for `WM_COPYDATA` messages whose `dwData` matches one of the fol
 WM_COPYDATA := 0x4A
 CMD := Map("SetRtf", 1, "InsertRtf", 2, "SetFile", 3, "InsertFile", 4
           , "RequestTemp", 5, "SetTitle", 8, "GetTitle", 9, "SetName", 11
-          , "GetName", 12, "GotoEnd", 14, "SetHtmlFile", 15, "RequestHtmlFile", 16)
+          , "GetName", 12, "GotoEnd", 14, "FixFont", 15, "CleanUpEnd", 16
+          , "SetHtmlFile", 17, "RequestHtmlFile", 18)
 
 target := WinExist("ahk_exe RadEdit.exe")
 if !target {
@@ -87,7 +90,7 @@ SendCopyData(target, CMD["RequestTemp"], "RadEditOutput")
 return
 
 CopyDataHandler(wParam, lParam, msg, hwnd) {
-    static CMD_TEMP := 5, CMD_TEMP_RESP := 6, CMD_HTML_RESP := 17, CMD_ERROR := 7
+    static CMD_TEMP := 5, CMD_TEMP_RESP := 6, CMD_HTML_RESP := 19, CMD_ERROR := 7
     cmd := NumGet(lParam, 0, "UPtr")
     size := NumGet(lParam, A_PtrSize, "UInt")
     text := StrGet(NumGet(lParam, 2*A_PtrSize, "Ptr"), size/2, "UTF-16")
