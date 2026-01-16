@@ -1132,6 +1132,11 @@ namespace RadEdit
                 return false;
             }
 
+            if (TryUpdateRegionByInlineRtf(regionName, replacementText))
+            {
+                return true;
+            }
+
             if (TryUpdateRegionByText(regionName, replacementText))
             {
                 return true;
@@ -1199,9 +1204,89 @@ namespace RadEdit
             return true;
         }
 
+        private bool TryUpdateRegionByInlineRtf(string regionName, string? replacementText)
+        {
+            string trimmedRegion = regionName.Trim();
+            string beginMarker = "[[BEGIN:" + trimmedRegion + "]]";
+            string endMarker = "[[END:" + trimmedRegion + "]]";
+            string rtf = richTextBox1.Rtf ?? string.Empty;
+
+            int beginIndex = rtf.IndexOf(beginMarker, StringComparison.Ordinal);
+            if (beginIndex < 0)
+            {
+                LogDebug("Begin marker not found in RTF for: " + trimmedRegion);
+                return false;
+            }
+
+            int endIndex = rtf.IndexOf(endMarker, beginIndex + beginMarker.Length, StringComparison.Ordinal);
+            if (endIndex < 0)
+            {
+                LogDebug("End marker not found in RTF for: " + trimmedRegion);
+                return false;
+            }
+
+            string replacementRtf = EscapeRtfText(replacementText ?? string.Empty);
+            int v0Index = rtf.IndexOf(@"\v0", beginIndex + beginMarker.Length, StringComparison.Ordinal);
+            int hiddenOnIndex = FindHiddenOnControlWordStart(rtf, endIndex);
+
+            if (v0Index >= 0 && v0Index < endIndex && hiddenOnIndex >= 0 && hiddenOnIndex < endIndex)
+            {
+                int visibleStart = v0Index + 3;
+                if (visibleStart < rtf.Length && rtf[visibleStart] == ' ')
+                {
+                    visibleStart++;
+                }
+
+                if (visibleStart > hiddenOnIndex)
+                {
+                    LogDebug("Inline RTF span invalid for: " + trimmedRegion);
+                    return false;
+                }
+
+                string updated = rtf.Substring(0, visibleStart) + replacementRtf + rtf.Substring(hiddenOnIndex);
+                RunProgrammaticRtfUpdate(() => richTextBox1.Rtf = updated);
+                LogDebug("Region updated via inline RTF: " + trimmedRegion);
+                return true;
+            }
+
+            if (string.IsNullOrEmpty(replacementRtf))
+            {
+                LogDebug("Inline RTF clear skipped for: " + trimmedRegion);
+                return true;
+            }
+
+            int insertStart = beginIndex + beginMarker.Length;
+            string updatedRtf = rtf.Insert(insertStart, @"\v0 ");
+            endIndex = updatedRtf.IndexOf(endMarker, insertStart + 4, StringComparison.Ordinal);
+            if (endIndex < 0)
+            {
+                LogDebug("Inline RTF end marker missing after insert for: " + trimmedRegion);
+                return false;
+            }
+
+            updatedRtf = updatedRtf.Insert(endIndex, @"\v ");
+            int visibleInsertStart = insertStart + 4;
+            if (visibleInsertStart > endIndex)
+            {
+                LogDebug("Inline RTF insert span invalid for: " + trimmedRegion);
+                return false;
+            }
+
+            updatedRtf = updatedRtf.Substring(0, visibleInsertStart) + replacementRtf + updatedRtf.Substring(endIndex);
+            RunProgrammaticRtfUpdate(() => richTextBox1.Rtf = updatedRtf);
+            LogDebug("Region updated via inline RTF insert: " + trimmedRegion);
+            return true;
+        }
+
         private bool TryUpdateRegionByText(string regionName, string? replacementText)
         {
             string trimmedRegion = regionName.Trim();
+            if (string.IsNullOrEmpty(replacementText))
+            {
+                LogDebug("Region update via Text skipped for empty replacement: " + trimmedRegion);
+                return false;
+            }
+
             string beginMarker = "[[BEGIN:" + trimmedRegion + "]]";
             string endMarker = "[[END:" + trimmedRegion + "]]";
             string text = richTextBox1.Text ?? string.Empty;
@@ -1363,6 +1448,34 @@ namespace RadEdit
             }
 
             return false;
+        }
+
+        private static int FindHiddenOnControlWordStart(string rtf, int searchIndex)
+        {
+            int index = searchIndex;
+            while (index >= 0)
+            {
+                index = rtf.LastIndexOf(@"\v", index, StringComparison.Ordinal);
+                if (index < 0)
+                {
+                    return -1;
+                }
+
+                int nextIndex = index + 2;
+                if (nextIndex < rtf.Length)
+                {
+                    char nextChar = rtf[nextIndex];
+                    if (char.IsLetterOrDigit(nextChar))
+                    {
+                        index--;
+                        continue;
+                    }
+                }
+
+                return index;
+            }
+
+            return -1;
         }
 
         private static bool IsRtfEscaped(string rtf, int index)

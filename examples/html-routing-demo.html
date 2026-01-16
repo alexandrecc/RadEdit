@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Project Request Form</title>
+    <title>Radiology Imaging Request Form</title>
     <style>
         :root {
             --primary-color: #2563eb;
@@ -231,8 +231,8 @@
 
     <div class="form-container">
         <header class="form-header">
-            <h1>Project Request Form</h1>
-            <p>Please fill out the details below so we can scope your project accurately.</p>
+            <h1>Radiology Imaging Request Form</h1>
+            <p>Provide patient details and exam requirements so we can schedule and protocol the study.</p>
         </header>
 
         <form action="#" method="POST">
@@ -240,83 +240,83 @@
             <div class="form-grid">
                 <div class="grid-2">
                     <div>
-                        <label for="first-name" class="required">First Name</label>
-                        <input type="text" id="first-name" name="first-name" placeholder="Jane" required data-field="FIRST_NAME" data-target-region="FIRST_NAME">
+                        <label for="first-name" class="required">Patient First Name</label>
+                        <input type="text" id="first-name" name="first-name" placeholder="Taylor" required data-field="FIRST_NAME" data-target-region="FIRST_NAME">
                     </div>
                     <div>
-                        <label for="last-name" class="required">Last Name</label>
-                        <input type="text" id="last-name" name="last-name" placeholder="Doe" required data-field="LAST_NAME" data-target-region="LAST_NAME">
+                        <label for="last-name" class="required">Patient Last Name</label>
+                        <input type="text" id="last-name" name="last-name" placeholder="Morgan" required data-field="LAST_NAME" data-target-region="LAST_NAME">
                     </div>
                 </div>
 
                 <div class="grid-2">
                     <div>
-                        <label for="email" class="required">Email Address</label>
-                        <input type="email" id="email" name="email" placeholder="jane@company.com" required data-field="EMAIL" data-target-region="EMAIL">
+                        <label for="email" class="required">Referring Provider Email</label>
+                        <input type="email" id="email" name="email" placeholder="provider@hospital.org" required data-field="EMAIL" data-target-region="EMAIL">
                     </div>
                     <div>
-                        <label for="phone">Phone Number</label>
-                        <input type="tel" id="phone" name="phone" placeholder="+1 (555) 000-0000" data-field="PHONE" data-target-region="PHONE">
+                        <label for="phone">Callback Phone</label>
+                        <input type="tel" id="phone" name="phone" placeholder="+1 (555) 123-4567" data-field="PHONE" data-target-region="PHONE">
                     </div>
                 </div>
 
                 <div>
-                    <label for="smartMenu">Smart Menu (press 1-9)</label>
+                    <label for="smartMenu">Worklist Shortcut (press 1-9)</label>
                     <select id="smartMenu" data-field="SMART_MENU" data-target-region="SMART_MENU">
-                        <option value="Dashboard">Dashboard</option>
-                        <option value="Profile">Profile</option>
-                        <option value="Settings">Settings</option>
-                        <option value="Analytics">Analytics</option>
-                        <option value="Reports">Reports</option>
-                        <option value="Messages">Messages</option>
-                        <option value="Billing">Billing</option>
-                        <option value="Support">Support</option>
-                        <option value="Logout">Logout</option>
+                        <option value="CT">CT</option>
+                        <option value="MRI">MRI</option>
+                        <option value="X-Ray">X-Ray</option>
+                        <option value="Ultrasound">Ultrasound</option>
+                        <option value="Mammography">Mammography</option>
+                        <option value="Nuclear Medicine">Nuclear Medicine</option>
+                        <option value="Interventional">Interventional</option>
+                        <option value="PET/CT">PET/CT</option>
+                        <option value="Fluoroscopy">Fluoroscopy</option>
                     </select>
                 </div>
             </div>
 
             <div class="form-section">
-                <h3 class="section-title">Project Details</h3>
+                <h3 class="section-title">Exam Details</h3>
 
                 <div class="form-grid">
                     <div>
-                        <label for="department" class="required">Service Type</label>
+                        <label for="department" class="required">Imaging Modality</label>
                         <select id="department" name="department" required data-field="SERVICE_TYPE" data-target-region="SERVICE_TYPE"
-                                data-map='{"web-dev":"Web Development","mobile-app":"Mobile Application","ui-ux":"UI/UX Design","consulting":"Technical Consulting"}'>
-                            <option value="" disabled selected>Select a service...</option>
-                            <option value="web-dev">Web Development</option>
-                            <option value="mobile-app">Mobile Application</option>
-                            <option value="ui-ux">UI/UX Design</option>
-                            <option value="consulting">Technical Consulting</option>
+                                data-map='{"ct":"CT","mri":"MRI","xray":"X-Ray","ultrasound":"Ultrasound"}'>
+                            <option value="" disabled selected>Select a modality...</option>
+                            <option value="ct">CT</option>
+                            <option value="mri">MRI</option>
+                            <option value="xray">X-Ray</option>
+                            <option value="ultrasound">Ultrasound</option>
                         </select>
                     </div>
 
                     <div class="grid-2">
                         <div>
-                            <label>Project Priority</label>
+                            <label>Urgency</label>
                             <div class="radio-group">
                                 <label class="custom-control">
                                     <input type="radio" name="priority" value="standard" checked data-field="PRIORITY" data-target-region="PRIORITY"
-                                           data-map='{"standard":"Standard (2-4 weeks)"}'>
-                                    Standard (2-4 weeks)
+                                           data-map='{"standard":"Routine (24-72 hours)"}'>
+                                    Routine (24-72 hours)
                                 </label>
                                 <label class="custom-control">
                                     <input type="radio" name="priority" value="urgent" data-field="PRIORITY" data-target-region="PRIORITY"
-                                           data-map='{"urgent":"Urgent (ASAP)"}'>
-                                    Urgent (ASAP)
+                                           data-map='{"urgent":"STAT (ASAP)"}'>
+                                    STAT (ASAP)
                                 </label>
                             </div>
                         </div>
 
                         <div>
-                            <label for="deadline">Desired Start Date</label>
+                            <label for="deadline">Preferred Exam Date</label>
                             <input type="date" id="deadline" name="deadline" data-field="START_DATE" data-target-region="START_DATE">
                         </div>
                     </div>
 
                     <div class="range-container">
-                        <label for="budget">Estimated Budget ($)</label>
+                        <label for="budget">Estimated Study Charge ($)</label>
                         <input type="range" id="budget" name="budget" min="1000" max="50000" step="1000" value="5000">
                         <output id="budgetDisplay" class="section-title" style="display:block; margin-top:0.5rem; font-size:1.2rem; color:var(--primary-color);">$5,000</output>
                         <div class="range-values">
@@ -329,41 +329,48 @@
             </div>
 
             <div class="form-section">
-                <h3 class="section-title">Requirements & Assets</h3>
+                <h3 class="section-title">Clinical Requirements</h3>
 
                 <div class="form-grid">
                     <div>
-                        <label>Included Features</label>
+                        <label>Requested Add-ons</label>
                         <div class="checkbox-group" style="flex-direction: row; flex-wrap: wrap; gap: 1.5rem;">
                             <label class="custom-control">
-                                <input type="checkbox" name="features" value="CMS Integration" data-label="CMS Integration">
-                                CMS Integration
+                                <input type="checkbox" name="features" value="CMS Integration"
+                                       data-field="FEATURE_CMS" data-target-region="FEATURE_CMS"
+                                       data-map='{"true":"CAD/AI Assist","false":""}'>
+                                CAD/AI Assist
                             </label>
                             <label class="custom-control">
-                                <input type="checkbox" name="features" value="SEO Optimization" data-label="SEO Optimization">
-                                SEO Optimization
+                                <input type="checkbox" name="features" value="SEO Optimization"
+                                       data-field="FEATURE_SEO" data-target-region="FEATURE_SEO"
+                                       data-map='{"true":"Contrast Required","false":""}'>
+                                Contrast Required
                             </label>
                             <label class="custom-control">
-                                <input type="checkbox" name="features" value="Analytics" data-label="Analytics">
-                                Analytics
+                                <input type="checkbox" name="features" value="Analytics"
+                                       data-field="FEATURE_ANALYTICS" data-target-region="FEATURE_ANALYTICS"
+                                       data-map='{"true":"3D Reconstruction","false":""}'>
+                                3D Reconstruction
                             </label>
                             <label class="custom-control">
-                                <input type="checkbox" name="features" value="E-Commerce" data-label="E-Commerce">
-                                E-Commerce
+                                <input type="checkbox" name="features" value="E-Commerce"
+                                       data-field="FEATURE_ECOMMERCE" data-target-region="FEATURE_ECOMMERCE"
+                                       data-map='{"true":"Sedation Needed","false":""}'>
+                                Sedation Needed
                             </label>
                         </div>
-                        <input type="hidden" id="featuresValue" data-field="FEATURES" data-target-region="FEATURES">
                     </div>
 
                     <div>
-                        <label for="message" class="required">Project Description</label>
-                        <textarea id="message" name="message" placeholder="Please describe the core features and goals of your project..." required
+                        <label for="message" class="required">Clinical Indication</label>
+                        <textarea id="message" name="message" placeholder="Please describe symptoms, prior imaging, and clinical question..." required
                                   data-field="DESCRIPTION" data-target-region="DESCRIPTION"></textarea>
-                        <p class="helper-text">Please be as detailed as possible.</p>
+                        <p class="helper-text">Include relevant history and any protocol preferences.</p>
                     </div>
 
                     <div>
-                        <label>Attach Specification (PDF, DOCX)</label>
+                        <label>Attach Prior Imaging / Orders (PDF, DOCX)</label>
                         <div class="file-upload-wrapper">
                             <input type="file" id="file-upload" name="file-upload" accept=".pdf,.doc,.docx">
                             <span class="file-icon">FILE</span>
@@ -378,11 +385,11 @@
             <div class="form-section" style="border:none;">
                 <label class="custom-control">
                     <input type="checkbox" id="terms" data-field="TERMS" data-target-region="TERMS"
-                           data-map='{"true":"Accepted","false":"Not accepted"}'>
-                    I agree to the <a href="#" style="color:var(--primary-color); margin-left: 4px;">Terms and Privacy Policy</a>.
+                           data-map='{"true":"Consent on file","false":"Consent pending"}'>
+                    I confirm patient consent is on file and risks were reviewed.
                 </label>
 
-                <button type="submit" class="submit-btn">Submit Request</button>
+                <button type="submit" class="submit-btn">Submit Imaging Request</button>
             </div>
 
         </form>
@@ -393,8 +400,6 @@
         const budgetRange = document.getElementById('budget');
         const budgetDisplay = document.getElementById('budgetDisplay');
         const budgetValue = document.getElementById('budgetValue');
-        const featureChecks = Array.from(document.querySelectorAll('input[name="features"]'));
-        const featuresValue = document.getElementById('featuresValue');
         const fileUpload = document.getElementById('file-upload');
         const attachmentValue = document.getElementById('attachmentValue');
 
@@ -417,14 +422,6 @@
             budgetValue.dispatchEvent(new Event('change', { bubbles: true }));
         }
 
-        function updateFeatures() {
-            const values = featureChecks
-                .filter((input) => input.checked)
-                .map((input) => input.getAttribute('data-label') || input.value);
-            featuresValue.value = values.join(', ');
-            featuresValue.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-
         function updateAttachment() {
             const file = fileUpload.files && fileUpload.files.length ? fileUpload.files[0] : null;
             attachmentValue.value = file ? file.name : '';
@@ -432,11 +429,9 @@
         }
 
         budgetRange.addEventListener('input', updateBudget);
-        featureChecks.forEach((input) => input.addEventListener('change', updateFeatures));
         fileUpload.addEventListener('change', updateAttachment);
 
         updateBudget();
-        updateFeatures();
         updateAttachment();
         smartMenu.dispatchEvent(new Event('change', { bubbles: true }));
     </script>
