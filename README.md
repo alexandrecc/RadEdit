@@ -59,8 +59,11 @@ RadEdit listens for `WM_COPYDATA` messages whose `dwData` matches one of the fol
 | `SetHtmlFile` | 17 | File path | Loads the HTML file in WebView2 and switches the UI into HTML mode. |
 | `RequestHtmlFile` | 18 | Optional path or filename | Exports the current DOM (including filled form values) to an HTML file and returns the absolute path via `HtmlFileResponse`. Uses the same `%TEMP%`/absolute path rules as `RequestTempFile`. If HTML mode is not active, RadEdit falls back to `RequestTempFile` behavior and emits `TempFileResponse`. |
 | `HtmlFileResponse` | 19 | File path | Response emitted by RadEdit for `RequestHtmlFile`. |
+| `SetDataContext` | 20 | JSON object | Merges the supplied JSON object into the current data context. Empty payload clears the context. To replace entirely, send `{"__mode":"replace","data":{...}}`. |
+| `GetDataContext` | 21 | Optional key path | Returns the full data context JSON when empty, or a single value when given a dotted path like `patient.id`. Missing keys return `null`. |
+| `DataContextResponse` | 22 | JSON | Response emitted by RadEdit for `GetDataContext`. |
 
-> **Note**: RadEdit does not currently emit responses for commands other than `RequestTempFile`/`RequestHtmlFile`/`GetTitle`/`GetName`, but callers should always check for an `ErrorResponse` to surface issues.
+> **Note**: RadEdit does not currently emit responses for commands other than `RequestTempFile`/`RequestHtmlFile`/`GetTitle`/`GetName`/`GetDataContext`, but callers should always check for an `ErrorResponse` to surface issues.
 
 ## AutoHotkey Integration Example
 
@@ -69,7 +72,8 @@ WM_COPYDATA := 0x4A
 CMD := Map("SetRtf", 1, "InsertRtf", 2, "SetFile", 3, "InsertFile", 4
           , "RequestTemp", 5, "SetTitle", 8, "GetTitle", 9, "SetName", 11
           , "GetName", 12, "GotoEnd", 14, "FixFont", 15, "CleanUpEnd", 16
-          , "SetHtmlFile", 17, "RequestHtmlFile", 18)
+          , "SetHtmlFile", 17, "RequestHtmlFile", 18
+          , "SetDataContext", 20, "GetDataContext", 21)
 
 target := WinExist("ahk_exe RadEdit.exe")
 if !target {
@@ -84,13 +88,18 @@ SendCopyData(target, CMD["SetRtf"], "{\rtf1\ansi Hello, world!}")
 SendCopyData(target, CMD["SetTitle"], "Patient Summary")
 SendCopyData(target, CMD["SetName"], "Dr. Example")
 
+; set and read a data context value
+ctxJson := '{"patientId":"123456","accession":"ABC-2026-0001"}'
+SendCopyData(target, CMD["SetDataContext"], ctxJson)
+SendCopyData(target, CMD["GetDataContext"], "patientId")
+
 ; request a temp file and capture the response
 OnMessage(WM_COPYDATA, CopyDataHandler)
 SendCopyData(target, CMD["RequestTemp"], "RadEditOutput")
 return
 
 CopyDataHandler(wParam, lParam, msg, hwnd) {
-    static CMD_TEMP := 5, CMD_TEMP_RESP := 6, CMD_HTML_RESP := 19, CMD_ERROR := 7
+    static CMD_TEMP := 5, CMD_TEMP_RESP := 6, CMD_HTML_RESP := 19, CMD_CONTEXT_RESP := 22, CMD_ERROR := 7
     cmd := NumGet(lParam, 0, "UPtr")
     size := NumGet(lParam, A_PtrSize, "UInt")
     text := StrGet(NumGet(lParam, 2*A_PtrSize, "Ptr"), size/2, "UTF-16")
@@ -98,6 +107,8 @@ CopyDataHandler(wParam, lParam, msg, hwnd) {
         MsgBox "Temp file created: " text
     } else if (cmd = CMD_HTML_RESP) {
         MsgBox "HTML file created: " text
+    } else if (cmd = CMD_CONTEXT_RESP) {
+        MsgBox "Data context: " text
     } else if (cmd = CMD_ERROR) {
         MsgBox "RadEdit error: " text
     }
@@ -115,6 +126,10 @@ SendCopyData(hwnd, command, text := "") {
     DllCall("user32\SendMessageW", "Ptr", hwnd, "UInt", WM_COPYDATA, "Ptr", A_ScriptHwnd, "Ptr", cds.Ptr, "Ptr")
 }
 ```
+
+## Data Context Demo (AutoHotkey)
+
+Run `examples\data-context-demo.ahk` to send a `SetDataContext` JSON payload and request the `patientId` back via `GetDataContext`. A `DataContextResponse` message box confirms the round trip.
 
 ## HTML to RTF Routing
 

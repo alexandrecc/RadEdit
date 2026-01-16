@@ -4,6 +4,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading;
 using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
@@ -32,11 +33,17 @@ namespace RadEdit
             CleanUpEnd = 16,
             SetHtmlFile = 17,
             RequestHtmlFile = 18,
-            HtmlFileResponse = 19
+            HtmlFileResponse = 19,
+            SetDataContext = 20,
+            GetDataContext = 21,
+            DataContextResponse = 22
         }
 
         private const int WM_COPYDATA = 0x004A;
         private const string HtmlRegionMessageType = "regionUpdate";
+        private const string DataContextModeKey = "__mode";
+        private const string DataContextReplaceMode = "replace";
+        private const string DataContextDataKey = "data";
         private static readonly JsonSerializerOptions HtmlMessageJsonOptions = new()
         {
             PropertyNameCaseInsensitive = true
@@ -211,6 +218,8 @@ namespace RadEdit
         private string lastRtfSnapshot = string.Empty;
         private bool suppressRtfEvents;
         private bool allowRtfUpdatesWhileHtmlFocus;
+        private readonly object dataContextLock = new();
+        private JsonObject dataContext = new();
 
         public Form1()
         {
@@ -278,11 +287,16 @@ namespace RadEdit
                 case CopyDataCommand.TempFileResponse:
                 case CopyDataCommand.HtmlFileResponse:
                 case CopyDataCommand.TitleResponse:
+                case CopyDataCommand.DataContextResponse:
                 case CopyDataCommand.ErrorResponse:
                     // Responses are handled upstream by callers.
                     return true;
                 case CopyDataCommand.GetName:
                     return TrySendName(senderHandle);
+                case CopyDataCommand.SetDataContext:
+                    return TrySetDataContext(payload);
+                case CopyDataCommand.GetDataContext:
+                    return TrySendDataContext(senderHandle, payload);
                 case CopyDataCommand.GotoEnd:
                     return TryGotoEnd();
                 case CopyDataCommand.FixFont:
@@ -856,6 +870,108 @@ namespace RadEdit
 
             string name = toolStripNameLabel.Text ?? string.Empty;
             return NativeMethods.SendCopyData(recipient, CopyDataCommand.NameResponse, name);
+        }
+
+        private bool TrySetDataContext(string? payload)
+        {
+            if (string.IsNullOrWhiteSpace(payload))
+            {
+                lock (dataContextLock)
+                {
+                    dataContext = new JsonObject();
+                }
+
+                return true;
+            }
+
+            JsonNode? node = JsonNode.Parse(payload);
+            if (node is not JsonObject obj)
+            {
+                throw new ArgumentException("SetDataContext payload must be a JSON object.");
+            }
+
+            if (TryReplaceDataContext(obj))
+            {
+                return true;
+            }
+
+            lock (dataContextLock)
+            {
+                foreach (var kvp in obj)
+                {
+                    dataContext[kvp.Key] = kvp.Value?.DeepClone();
+                }
+            }
+
+            return true;
+        }
+
+        private bool TryReplaceDataContext(JsonObject obj)
+        {
+            if (!obj.TryGetPropertyValue(DataContextModeKey, out JsonNode? modeNode))
+            {
+                return false;
+            }
+
+            if (modeNode is not JsonValue modeValue || !modeValue.TryGetValue(out string? mode))
+            {
+                throw new ArgumentException("SetDataContext __mode must be a string.");
+            }
+
+            if (!string.Equals(mode, DataContextReplaceMode, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException($"SetDataContext __mode '{mode}' is not supported.");
+            }
+
+            if (!obj.TryGetPropertyValue(DataContextDataKey, out JsonNode? dataNode) || dataNode is not JsonObject dataObj)
+            {
+                throw new ArgumentException("SetDataContext replace payload must include a data object.");
+            }
+
+            lock (dataContextLock)
+            {
+                dataContext = (JsonObject)dataObj.DeepClone();
+            }
+
+            return true;
+        }
+
+        private bool TrySendDataContext(IntPtr recipient, string? payload)
+        {
+            if (recipient == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            string response;
+            lock (dataContextLock)
+            {
+                if (string.IsNullOrWhiteSpace(payload))
+                {
+                    response = dataContext.ToJsonString();
+                }
+                else
+                {
+                    string keyPath = payload.Trim();
+                    JsonNode? node = dataContext;
+                    foreach (var part in keyPath.Split('.', StringSplitOptions.RemoveEmptyEntries))
+                    {
+                        if (node is JsonObject obj && obj.TryGetPropertyValue(part, out JsonNode? next))
+                        {
+                            node = next;
+                        }
+                        else
+                        {
+                            node = null;
+                            break;
+                        }
+                    }
+
+                    response = node?.ToJsonString() ?? "null";
+                }
+            }
+
+            return NativeMethods.SendCopyData(recipient, CopyDataCommand.DataContextResponse, response);
         }
 
         private bool TryGotoEnd()
