@@ -2368,7 +2368,7 @@ namespace RadEdit
                 return $"{parsed.Major}.{parsed.Minor}";
             }
 
-            return "0.2";
+            return "0.2.0";
         }
 
         private static class NativeMethods
