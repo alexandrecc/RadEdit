@@ -154,6 +154,27 @@ Then add `data-target-region` in the HTML. When the field changes, RadEdit repla
 
 Checkboxes can use `data-map` with `true`/`false` keys. A working demo lives in `examples\html-routing-demo.html`, `examples\html-routing-demo.rtf`, and `examples\html-routing-demo.ahk`.
 
+## HTML View Metadata
+
+Local HTML files can include a meta tag that tells RadEdit how to open the HTML view when the file loads. This is only read for local HTML files (not remote URLs).
+
+```
+<meta name="radedit:view" content="mode=split;size=50">
+```
+
+Supported keys:
+
+- `mode`: `split`, `pop`, or `full`.
+- `size`: percent for split mode (0-100). Defaults to 50.
+- `monitor`: 1-based monitor index for `pop`/`full` (falls back to primary monitor).
+- `x`, `y`, `width`, `height`: pop window bounds (pixels).
+
+Examples live in:
+
+- `examples\html-view-meta-split-50.html`
+- `examples\html-view-meta-pop.html`
+- `examples\html-view-meta-full-monitor-1.html`
+
 ## Troubleshooting
 
 - **SetRtf/InsertRtf fails silently**: ensure the payload is valid RTF (e.g., starts with `{\rtf`).

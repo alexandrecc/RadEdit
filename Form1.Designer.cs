@@ -31,6 +31,7 @@ namespace RadEdit
             toolStrip1 = new ToolStrip();
             toolStripTitleLabel = new ToolStripLabel();
             toolStripNameLabel = new ToolStripLabel();
+            toolStripButtons = new ToolStrip();
             toolStripBoldButton = new ToolStripButton();
             toolStripUnderlineButton = new ToolStripButton();
             toolStripItalicButton = new ToolStripButton();
@@ -38,20 +39,31 @@ namespace RadEdit
             toolStripPopRtfButton = new ToolStripButton();
             splitContainer1 = new SplitContainer();
             richTextBox1 = new RichTextBox();
+            panelHtmlBar = new Panel();
+            panelHtmlHost = new Panel();
+            buttonHtmlBack = new Button();
+            buttonHtmlForward = new Button();
+            textBoxHtmlUrl = new TextBox();
+            buttonHtmlBrowse = new Button();
+            buttonHtmlClear = new Button();
+            buttonHtmlGo = new Button();
             webView2 = new Microsoft.Web.WebView2.WinForms.WebView2();
             toolStrip1.SuspendLayout();
+            toolStripButtons.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)webView2).BeginInit();
             ((System.ComponentModel.ISupportInitialize)splitContainer1).BeginInit();
             splitContainer1.Panel1.SuspendLayout();
             splitContainer1.Panel2.SuspendLayout();
             splitContainer1.SuspendLayout();
+            panelHtmlBar.SuspendLayout();
             SuspendLayout();
             // 
             // toolStrip1
             // 
+            toolStrip1.Dock = DockStyle.Top;
             toolStrip1.GripStyle = ToolStripGripStyle.Hidden;
             toolStrip1.ImageScalingSize = new Size(24, 24);
-            toolStrip1.Items.AddRange(new ToolStripItem[] { toolStripTitleLabel, toolStripNameLabel, toolStripPopHtmlButton, toolStripPopRtfButton, toolStripItalicButton, toolStripUnderlineButton, toolStripBoldButton });
+            toolStrip1.Items.AddRange(new ToolStripItem[] { toolStripTitleLabel, toolStripNameLabel });
             toolStrip1.Location = new Point(0, 0);
             toolStrip1.Name = "toolStrip1";
             toolStrip1.Padding = new Padding(4, 0, 1, 0);
@@ -78,9 +90,21 @@ namespace RadEdit
             toolStripNameLabel.Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point);
             toolStripNameLabel.ToolTipText = "Current name";
             // 
+            // toolStripButtons
+            // 
+            toolStripButtons.Dock = DockStyle.Top;
+            toolStripButtons.GripStyle = ToolStripGripStyle.Hidden;
+            toolStripButtons.ImageScalingSize = new Size(24, 24);
+            toolStripButtons.Items.AddRange(new ToolStripItem[] { toolStripBoldButton, toolStripItalicButton, toolStripUnderlineButton, toolStripPopHtmlButton, toolStripPopRtfButton });
+            toolStripButtons.Location = new Point(0, 27);
+            toolStripButtons.Name = "toolStripButtons";
+            toolStripButtons.Padding = new Padding(4, 0, 1, 0);
+            toolStripButtons.Size = new Size(800, 27);
+            toolStripButtons.TabIndex = 1;
+            toolStripButtons.Text = "toolStripButtons";
+            // 
             // toolStripBoldButton
             // 
-            toolStripBoldButton.Alignment = ToolStripItemAlignment.Right;
             toolStripBoldButton.DisplayStyle = ToolStripItemDisplayStyle.Text;
             toolStripBoldButton.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
             toolStripBoldButton.Name = "toolStripBoldButton";
@@ -91,7 +115,6 @@ namespace RadEdit
             // 
             // toolStripUnderlineButton
             // 
-            toolStripUnderlineButton.Alignment = ToolStripItemAlignment.Right;
             toolStripUnderlineButton.DisplayStyle = ToolStripItemDisplayStyle.Text;
             toolStripUnderlineButton.Font = new Font("Segoe UI", 9F, FontStyle.Underline);
             toolStripUnderlineButton.Name = "toolStripUnderlineButton";
@@ -102,7 +125,6 @@ namespace RadEdit
             // 
             // toolStripItalicButton
             // 
-            toolStripItalicButton.Alignment = ToolStripItemAlignment.Right;
             toolStripItalicButton.DisplayStyle = ToolStripItemDisplayStyle.Text;
             toolStripItalicButton.Font = new Font("Segoe UI", 9F, FontStyle.Italic);
             toolStripItalicButton.Name = "toolStripItalicButton";
@@ -113,7 +135,6 @@ namespace RadEdit
             // 
             // toolStripPopHtmlButton
             // 
-            toolStripPopHtmlButton.Alignment = ToolStripItemAlignment.Right;
             toolStripPopHtmlButton.DisplayStyle = ToolStripItemDisplayStyle.Text;
             toolStripPopHtmlButton.Name = "toolStripPopHtmlButton";
             toolStripPopHtmlButton.Size = new Size(63, 24);
@@ -123,7 +144,6 @@ namespace RadEdit
             // 
             // toolStripPopRtfButton
             // 
-            toolStripPopRtfButton.Alignment = ToolStripItemAlignment.Right;
             toolStripPopRtfButton.DisplayStyle = ToolStripItemDisplayStyle.Text;
             toolStripPopRtfButton.Name = "toolStripPopRtfButton";
             toolStripPopRtfButton.Size = new Size(57, 24);
@@ -134,7 +154,7 @@ namespace RadEdit
             // splitContainer1
             // 
             splitContainer1.Dock = DockStyle.Fill;
-            splitContainer1.Location = new Point(0, 27);
+            splitContainer1.Location = new Point(0, 54);
             splitContainer1.Name = "splitContainer1";
             splitContainer1.Orientation = Orientation.Horizontal;
             // 
@@ -144,10 +164,11 @@ namespace RadEdit
             // 
             // splitContainer1.Panel2
             // 
-            splitContainer1.Panel2.Controls.Add(webView2);
-            splitContainer1.Size = new Size(800, 423);
-            splitContainer1.SplitterDistance = 211;
-            splitContainer1.TabIndex = 1;
+            splitContainer1.Panel2.Controls.Add(panelHtmlHost);
+            splitContainer1.Panel2.Controls.Add(panelHtmlBar);
+            splitContainer1.Size = new Size(800, 396);
+            splitContainer1.SplitterDistance = 198;
+            splitContainer1.TabIndex = 2;
             // 
             // richTextBox1
             // 
@@ -158,9 +179,100 @@ namespace RadEdit
             richTextBox1.Location = new Point(0, 0);
             richTextBox1.Name = "richTextBox1";
             richTextBox1.ScrollBars = RichTextBoxScrollBars.Vertical;
-            richTextBox1.Size = new Size(800, 211);
+            richTextBox1.Size = new Size(800, 198);
             richTextBox1.TabIndex = 0;
             richTextBox1.Text = "";
+            // 
+            // panelHtmlBar
+            // 
+            panelHtmlBar.Controls.Add(buttonHtmlGo);
+            panelHtmlBar.Controls.Add(buttonHtmlClear);
+            panelHtmlBar.Controls.Add(buttonHtmlBrowse);
+            panelHtmlBar.Controls.Add(textBoxHtmlUrl);
+            panelHtmlBar.Controls.Add(buttonHtmlForward);
+            panelHtmlBar.Controls.Add(buttonHtmlBack);
+            panelHtmlBar.Dock = DockStyle.Top;
+            panelHtmlBar.Location = new Point(0, 0);
+            panelHtmlBar.Name = "panelHtmlBar";
+            panelHtmlBar.Padding = new Padding(6, 3, 6, 3);
+            panelHtmlBar.Size = new Size(800, 30);
+            panelHtmlBar.TabIndex = 0;
+            // 
+            // buttonHtmlBack
+            // 
+            buttonHtmlBack.Dock = DockStyle.Left;
+            buttonHtmlBack.Enabled = false;
+            buttonHtmlBack.Location = new Point(6, 3);
+            buttonHtmlBack.Name = "buttonHtmlBack";
+            buttonHtmlBack.Size = new Size(32, 24);
+            buttonHtmlBack.TabIndex = 0;
+            buttonHtmlBack.Text = "<";
+            buttonHtmlBack.UseVisualStyleBackColor = true;
+            buttonHtmlBack.Click += ButtonHtmlBack_Click;
+            // 
+            // buttonHtmlForward
+            // 
+            buttonHtmlForward.Dock = DockStyle.Left;
+            buttonHtmlForward.Enabled = false;
+            buttonHtmlForward.Location = new Point(38, 3);
+            buttonHtmlForward.Name = "buttonHtmlForward";
+            buttonHtmlForward.Size = new Size(32, 24);
+            buttonHtmlForward.TabIndex = 1;
+            buttonHtmlForward.Text = ">";
+            buttonHtmlForward.UseVisualStyleBackColor = true;
+            buttonHtmlForward.Click += ButtonHtmlForward_Click;
+            // 
+            // panelHtmlHost
+            // 
+            panelHtmlHost.Controls.Add(webView2);
+            panelHtmlHost.Dock = DockStyle.Fill;
+            panelHtmlHost.Location = new Point(0, 30);
+            panelHtmlHost.Name = "panelHtmlHost";
+            panelHtmlHost.Size = new Size(800, 164);
+            panelHtmlHost.TabIndex = 1;
+            // 
+            // textBoxHtmlUrl
+            // 
+            textBoxHtmlUrl.Dock = DockStyle.Fill;
+            textBoxHtmlUrl.Location = new Point(70, 3);
+            textBoxHtmlUrl.Name = "textBoxHtmlUrl";
+            textBoxHtmlUrl.PlaceholderText = "Enter URL or HTML file path";
+            textBoxHtmlUrl.Size = new Size(528, 23);
+            textBoxHtmlUrl.TabIndex = 2;
+            textBoxHtmlUrl.KeyDown += TextBoxHtmlUrl_KeyDown;
+            // 
+            // buttonHtmlBrowse
+            // 
+            buttonHtmlBrowse.Dock = DockStyle.Right;
+            buttonHtmlBrowse.Location = new Point(598, 3);
+            buttonHtmlBrowse.Name = "buttonHtmlBrowse";
+            buttonHtmlBrowse.Size = new Size(68, 24);
+            buttonHtmlBrowse.TabIndex = 3;
+            buttonHtmlBrowse.Text = "Open";
+            buttonHtmlBrowse.UseVisualStyleBackColor = true;
+            buttonHtmlBrowse.Click += ButtonHtmlBrowse_Click;
+            // 
+            // buttonHtmlClear
+            // 
+            buttonHtmlClear.Dock = DockStyle.Right;
+            buttonHtmlClear.Location = new Point(666, 3);
+            buttonHtmlClear.Name = "buttonHtmlClear";
+            buttonHtmlClear.Size = new Size(64, 24);
+            buttonHtmlClear.TabIndex = 4;
+            buttonHtmlClear.Text = "Clear";
+            buttonHtmlClear.UseVisualStyleBackColor = true;
+            buttonHtmlClear.Click += ButtonHtmlClear_Click;
+            // 
+            // buttonHtmlGo
+            // 
+            buttonHtmlGo.Dock = DockStyle.Right;
+            buttonHtmlGo.Location = new Point(730, 3);
+            buttonHtmlGo.Name = "buttonHtmlGo";
+            buttonHtmlGo.Size = new Size(64, 24);
+            buttonHtmlGo.TabIndex = 5;
+            buttonHtmlGo.Text = "Go";
+            buttonHtmlGo.UseVisualStyleBackColor = true;
+            buttonHtmlGo.Click += ButtonHtmlGo_Click;
             // 
             // webView2
             // 
@@ -170,8 +282,8 @@ namespace RadEdit
             webView2.Dock = DockStyle.Fill;
             webView2.Location = new Point(0, 0);
             webView2.Name = "webView2";
-            webView2.Size = new Size(800, 208);
-            webView2.TabIndex = 0;
+            webView2.Size = new Size(800, 164);
+            webView2.TabIndex = 1;
             webView2.ZoomFactor = 1D;
             // 
             // Form1
@@ -180,14 +292,19 @@ namespace RadEdit
             AutoScaleMode = AutoScaleMode.Font;
             ClientSize = new Size(800, 450);
             Controls.Add(splitContainer1);
+            Controls.Add(toolStripButtons);
             Controls.Add(toolStrip1);
             Name = "Form1";
             Text = "RadEdit";
             toolStrip1.ResumeLayout(false);
             toolStrip1.PerformLayout();
+            toolStripButtons.ResumeLayout(false);
+            toolStripButtons.PerformLayout();
             ((System.ComponentModel.ISupportInitialize)webView2).EndInit();
             splitContainer1.Panel1.ResumeLayout(false);
             splitContainer1.Panel2.ResumeLayout(false);
+            panelHtmlBar.ResumeLayout(false);
+            panelHtmlBar.PerformLayout();
             ((System.ComponentModel.ISupportInitialize)splitContainer1).EndInit();
             splitContainer1.ResumeLayout(false);
             ResumeLayout(false);
@@ -199,6 +316,7 @@ namespace RadEdit
         private ToolStrip toolStrip1;
         private ToolStripLabel toolStripTitleLabel;
         private ToolStripLabel toolStripNameLabel;
+        private ToolStrip toolStripButtons;
         private ToolStripButton toolStripBoldButton;
         private ToolStripButton toolStripUnderlineButton;
         private ToolStripButton toolStripItalicButton;
@@ -206,6 +324,14 @@ namespace RadEdit
         private ToolStripButton toolStripPopRtfButton;
         private SplitContainer splitContainer1;
         private RichTextBox richTextBox1;
+        private Panel panelHtmlBar;
+        private Panel panelHtmlHost;
+        private Button buttonHtmlBack;
+        private Button buttonHtmlForward;
+        private TextBox textBoxHtmlUrl;
+        private Button buttonHtmlBrowse;
+        private Button buttonHtmlClear;
+        private Button buttonHtmlGo;
         private Microsoft.Web.WebView2.WinForms.WebView2 webView2;
     }
 }

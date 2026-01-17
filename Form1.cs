@@ -1,13 +1,16 @@
 using System;
 using System.Drawing;
 using System.IO;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
+using System.Reflection;
 
 namespace RadEdit
 {
@@ -205,11 +208,34 @@ namespace RadEdit
                 IntPtr hWnd, int msg, IntPtr wParam, ref CHARFORMAT2W lParam);
         }
 
+        private enum HtmlViewMode
+        {
+            Split,
+            Pop,
+            Full
+        }
+
+        private sealed class HtmlViewOptions
+        {
+            public HtmlViewMode Mode { get; set; } = HtmlViewMode.Split;
+            public double? SplitPercent { get; set; }
+            public int? MonitorIndex { get; set; }
+            public int? X { get; set; }
+            public int? Y { get; set; }
+            public int? Width { get; set; }
+            public int? Height { get; set; }
+        }
+
         private const string HtmlHostName = "radedit.local";
         private const string HtmlLanguage = "fr-CA";
+        private const int HtmlBarHeightFallback = 30;
+        private const double DefaultHtmlSplitPercent = 0.5;
+        private const int HtmlMetaSampleLimit = 65536;
         private Task? webView2Initialization;
         private string? htmlRootFolder;
         private bool isHtmlMode;
+        private HtmlViewMode htmlViewMode = HtmlViewMode.Split;
+        private double htmlSplitPercent = DefaultHtmlSplitPercent;
         private string lastPlainText = string.Empty;
         private readonly SemaphoreSlim htmlInsertGate = new(1, 1);
         private Form? detachedHtmlHost;
@@ -224,9 +250,11 @@ namespace RadEdit
         public Form1()
         {
             InitializeComponent();
+            Text = $"RadEdit V{GetAppVersion()}";
             SetDefaultTypingFont("Arial", 10f);
             richTextBox1.SelectionChanged += RichTextBox1_SelectionChanged;
             richTextBox1.TextChanged += RichTextBox1_TextChanged;
+            splitContainer1.SizeChanged += SplitContainer1_SizeChanged;
             lastPlainText = richTextBox1.Text;
             lastRtfSnapshot = richTextBox1.Rtf ?? string.Empty;
             UpdateFormattingButtons();
@@ -506,6 +534,10 @@ namespace RadEdit
 
         private async Task LoadHtmlFileAsync(string fullPath)
         {
+            HtmlViewOptions? viewOptions = TryReadHtmlViewOptions(fullPath, out HtmlViewOptions? parsed)
+                ? parsed
+                : null;
+
             await EnsureWebView2InitializedAsync();
 
             string? folder = Path.GetDirectoryName(fullPath);
@@ -515,10 +547,12 @@ namespace RadEdit
             }
 
             ConfigureHtmlMapping(folder);
+            ApplyHtmlViewOptions(viewOptions);
 
             string fileName = Path.GetFileName(fullPath);
             string url = $"https://{HtmlHostName}/{Uri.EscapeDataString(fileName)}";
             webView2.Source = new Uri(url);
+            textBoxHtmlUrl.Text = fullPath;
             SetHtmlMode(true);
         }
 
@@ -567,6 +601,8 @@ namespace RadEdit
             {
                 webView2.CoreWebView2.Settings.IsWebMessageEnabled = true;
                 webView2.CoreWebView2.WebMessageReceived += WebView2_WebMessageReceived;
+                webView2.CoreWebView2.HistoryChanged += WebView2_HistoryChanged;
+                webView2.CoreWebView2.NavigationCompleted += WebView2_NavigationCompleted;
                 await webView2.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(HtmlRoutingScript);
                 LogDebug("WebView2 initialized. Routing script injected.");
             }
@@ -663,19 +699,581 @@ namespace RadEdit
             TryUpdateRtfRegion(region, text);
         }
 
+        private void WebView2_HistoryChanged(object? sender, object e)
+        {
+            UpdateHtmlNavButtons();
+        }
+
+        private void WebView2_NavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
+        {
+            UpdateHtmlNavButtons();
+        }
+
         private void SetHtmlMode(bool enable)
         {
-            if (isHtmlMode == enable)
+            if (isHtmlMode != enable)
+            {
+                isHtmlMode = enable;
+                lastPlainText = richTextBox1.Text;
+
+                toolStripBoldButton.Enabled = !enable;
+                toolStripItalicButton.Enabled = !enable;
+                toolStripUnderlineButton.Enabled = !enable;
+            }
+
+            webView2.Visible = enable;
+            UpdateHtmlPanelLayout();
+            UpdateHtmlNavButtons();
+        }
+
+        private void SplitContainer1_SizeChanged(object? sender, EventArgs e)
+        {
+            if (!isHtmlMode || IsControlDetached(webView2, detachedHtmlHost))
+            {
+                UpdateHtmlPanelLayout();
+            }
+        }
+
+        private void UpdateHtmlPanelLayout()
+        {
+            if (splitContainer1.Height <= 0)
             {
                 return;
             }
 
-            isHtmlMode = enable;
-            lastPlainText = richTextBox1.Text;
+            int barHeight = panelHtmlBar.Height > 0 ? panelHtmlBar.Height : HtmlBarHeightFallback;
+            splitContainer1.Panel2MinSize = barHeight;
 
-            toolStripBoldButton.Enabled = !enable;
-            toolStripItalicButton.Enabled = !enable;
-            toolStripUnderlineButton.Enabled = !enable;
+            bool showDockedHtml = isHtmlMode && !IsControlDetached(webView2, detachedHtmlHost);
+            int desiredPanel2Height = barHeight;
+            if (showDockedHtml)
+            {
+                double percent = Math.Clamp(htmlSplitPercent, 0, 1);
+                int targetHeight = (int)Math.Round(splitContainer1.Height * percent);
+                desiredPanel2Height = Math.Max(barHeight, targetHeight);
+            }
+            SetPanel2Height(desiredPanel2Height);
+        }
+
+        private void ResetHtmlViewOptions()
+        {
+            htmlViewMode = HtmlViewMode.Split;
+            htmlSplitPercent = DefaultHtmlSplitPercent;
+        }
+
+        private void ApplyHtmlViewOptions(HtmlViewOptions? options)
+        {
+            ResetHtmlViewOptions();
+
+            if (options != null)
+            {
+                htmlViewMode = options.Mode;
+                if (options.SplitPercent.HasValue)
+                {
+                    htmlSplitPercent = Math.Clamp(options.SplitPercent.Value, 0, 1);
+                }
+            }
+
+            switch (htmlViewMode)
+            {
+                case HtmlViewMode.Split:
+                    if (IsControlDetached(webView2, detachedHtmlHost))
+                    {
+                        DockWebView2();
+                    }
+                    break;
+                case HtmlViewMode.Pop:
+                    EnsureHtmlDetached();
+                    if (options != null)
+                    {
+                        ApplyDetachedBounds(options);
+                    }
+                    break;
+                case HtmlViewMode.Full:
+                    EnsureHtmlDetached();
+                    ApplyFullScreenBounds(options);
+                    break;
+            }
+        }
+
+        private void EnsureHtmlDetached()
+        {
+            if (!IsControlDetached(webView2, detachedHtmlHost))
+            {
+                DetachWebView2();
+            }
+        }
+
+        private void ApplyDetachedBounds(HtmlViewOptions options)
+        {
+            if (detachedHtmlHost == null)
+            {
+                return;
+            }
+
+            Screen screen = ResolveTargetScreen(options.MonitorIndex);
+            Rectangle workingArea = screen.WorkingArea;
+
+            int width = options.Width ?? Math.Min(workingArea.Width, 900);
+            int height = options.Height ?? Math.Min(workingArea.Height, 700);
+            width = Math.Clamp(width, 200, workingArea.Width);
+            height = Math.Clamp(height, 200, workingArea.Height);
+
+            int x = options.X ?? workingArea.Left + (workingArea.Width - width) / 2;
+            int y = options.Y ?? workingArea.Top + (workingArea.Height - height) / 2;
+
+            Rectangle desired = new Rectangle(x, y, width, height);
+            Rectangle bounded = ConstrainBounds(desired, workingArea);
+
+            detachedHtmlHost.StartPosition = FormStartPosition.Manual;
+            detachedHtmlHost.WindowState = FormWindowState.Normal;
+            detachedHtmlHost.Bounds = bounded;
+        }
+
+        private void ApplyFullScreenBounds(HtmlViewOptions? options)
+        {
+            if (detachedHtmlHost == null)
+            {
+                return;
+            }
+
+            Screen screen = ResolveTargetScreen(options?.MonitorIndex);
+            detachedHtmlHost.StartPosition = FormStartPosition.Manual;
+            detachedHtmlHost.WindowState = FormWindowState.Normal;
+            detachedHtmlHost.Bounds = screen.Bounds;
+        }
+
+        private static Screen ResolveTargetScreen(int? monitorIndex)
+        {
+            Screen[] screens = Screen.AllScreens;
+            if (monitorIndex.HasValue)
+            {
+                int index = monitorIndex.Value;
+                if (index >= 0 && index < screens.Length)
+                {
+                    return screens[index];
+                }
+            }
+
+            return Screen.PrimaryScreen ?? screens[0];
+        }
+
+        private static Rectangle ConstrainBounds(Rectangle desired, Rectangle container)
+        {
+            int x = Math.Clamp(desired.X, container.Left, container.Right - desired.Width);
+            int y = Math.Clamp(desired.Y, container.Top, container.Bottom - desired.Height);
+            return new Rectangle(x, y, desired.Width, desired.Height);
+        }
+
+        private static bool TryReadHtmlViewOptions(string fullPath, out HtmlViewOptions? options)
+        {
+            options = null;
+
+            string sample = ReadFileSample(fullPath, HtmlMetaSampleLimit);
+            if (string.IsNullOrEmpty(sample))
+            {
+                return false;
+            }
+
+            string? content = ExtractMetaContent(sample, "radedit:view");
+            if (string.IsNullOrWhiteSpace(content))
+            {
+                return false;
+            }
+
+            return TryParseHtmlViewOptions(content, out options);
+        }
+
+        private static string ReadFileSample(string fullPath, int limit)
+        {
+            using var stream = File.OpenRead(fullPath);
+            using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            char[] buffer = new char[limit];
+            int read = reader.Read(buffer, 0, buffer.Length);
+            return read > 0 ? new string(buffer, 0, read) : string.Empty;
+        }
+
+        private static string? ExtractMetaContent(string html, string metaName)
+        {
+            var metaRegex = new Regex("<meta\\s+[^>]*>", RegexOptions.IgnoreCase);
+            var nameRegex = new Regex("name\\s*=\\s*[\"'](?<name>[^\"']+)[\"']", RegexOptions.IgnoreCase);
+            var contentRegex = new Regex("content\\s*=\\s*[\"'](?<content>[^\"']*)[\"']", RegexOptions.IgnoreCase);
+
+            foreach (Match match in metaRegex.Matches(html))
+            {
+                string tag = match.Value;
+                Match nameMatch = nameRegex.Match(tag);
+                if (!nameMatch.Success)
+                {
+                    continue;
+                }
+
+                string name = nameMatch.Groups["name"].Value.Trim();
+                if (!string.Equals(name, metaName, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                Match contentMatch = contentRegex.Match(tag);
+                if (!contentMatch.Success)
+                {
+                    continue;
+                }
+
+                return contentMatch.Groups["content"].Value;
+            }
+
+            return null;
+        }
+
+        private static bool TryParseHtmlViewOptions(string content, out HtmlViewOptions? options)
+        {
+            options = null;
+            bool hasValue = false;
+            var parsed = new HtmlViewOptions();
+
+            string[] pairs = content.Split(new[] { ';', ',' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (string rawPair in pairs)
+            {
+                string pair = rawPair.Trim();
+                if (pair.Length == 0)
+                {
+                    continue;
+                }
+
+                string[] parts = pair.Split(new[] { '=' }, 2, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length == 0)
+                {
+                    continue;
+                }
+
+                string key = parts[0].Trim().ToLowerInvariant();
+                string value = parts.Length > 1 ? parts[1].Trim() : string.Empty;
+
+                switch (key)
+                {
+                    case "mode":
+                        if (TryParseMode(value, out HtmlViewMode mode))
+                        {
+                            parsed.Mode = mode;
+                            hasValue = true;
+                        }
+                        break;
+                    case "size":
+                        if (TryParsePercent(value, out double percent))
+                        {
+                            parsed.SplitPercent = percent;
+                            hasValue = true;
+                        }
+                        break;
+                    case "monitor":
+                        if (int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int monitor) &&
+                            monitor > 0)
+                        {
+                            parsed.MonitorIndex = monitor - 1;
+                            hasValue = true;
+                        }
+                        break;
+                    case "x":
+                        if (int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int x))
+                        {
+                            parsed.X = x;
+                            hasValue = true;
+                        }
+                        break;
+                    case "y":
+                        if (int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int y))
+                        {
+                            parsed.Y = y;
+                            hasValue = true;
+                        }
+                        break;
+                    case "width":
+                        if (int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int width))
+                        {
+                            parsed.Width = width;
+                            hasValue = true;
+                        }
+                        break;
+                    case "height":
+                        if (int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int height))
+                        {
+                            parsed.Height = height;
+                            hasValue = true;
+                        }
+                        break;
+                }
+            }
+
+            if (!hasValue)
+            {
+                return false;
+            }
+
+            options = parsed;
+            return true;
+        }
+
+        private static bool TryParseMode(string value, out HtmlViewMode mode)
+        {
+            switch (value.Trim().ToLowerInvariant())
+            {
+                case "split":
+                case "docked":
+                    mode = HtmlViewMode.Split;
+                    return true;
+                case "pop":
+                case "popup":
+                    mode = HtmlViewMode.Pop;
+                    return true;
+                case "full":
+                case "fullscreen":
+                    mode = HtmlViewMode.Full;
+                    return true;
+                default:
+                    mode = HtmlViewMode.Split;
+                    return false;
+            }
+        }
+
+        private static bool TryParsePercent(string value, out double percent)
+        {
+            percent = 0;
+            string cleaned = value.Trim().TrimEnd('%');
+            if (!double.TryParse(cleaned, NumberStyles.Float, CultureInfo.InvariantCulture, out double raw))
+            {
+                return false;
+            }
+
+            if (raw > 1)
+            {
+                raw /= 100d;
+            }
+
+            percent = Math.Clamp(raw, 0, 1);
+            return true;
+        }
+
+        private void UpdateHtmlNavButtons()
+        {
+            bool canGoBack = false;
+            bool canGoForward = false;
+
+            if (isHtmlMode && webView2.CoreWebView2 != null)
+            {
+                canGoBack = webView2.CoreWebView2.CanGoBack;
+                canGoForward = webView2.CoreWebView2.CanGoForward;
+            }
+
+            buttonHtmlBack.Enabled = canGoBack;
+            buttonHtmlForward.Enabled = canGoForward;
+        }
+
+        private void SetPanel2Height(int panel2Height)
+        {
+            int totalHeight = splitContainer1.Height;
+            if (totalHeight <= 0)
+            {
+                return;
+            }
+
+            int minPanel2 = Math.Max(splitContainer1.Panel2MinSize, 0);
+            panel2Height = Math.Max(panel2Height, minPanel2);
+
+            int splitterWidth = splitContainer1.SplitterWidth;
+            int desiredPanel1Height = totalHeight - panel2Height - splitterWidth;
+            if (desiredPanel1Height < splitContainer1.Panel1MinSize)
+            {
+                desiredPanel1Height = splitContainer1.Panel1MinSize;
+            }
+
+            if (desiredPanel1Height < 0 || desiredPanel1Height > totalHeight - splitterWidth)
+            {
+                return;
+            }
+
+            splitContainer1.SplitterDistance = desiredPanel1Height;
+        }
+
+        private async void ButtonHtmlGo_Click(object? sender, EventArgs e)
+        {
+            await LoadHtmlFromInputAsync();
+        }
+
+        private void ButtonHtmlClear_Click(object? sender, EventArgs e)
+        {
+            ClearHtmlView();
+        }
+
+        private void ButtonHtmlBack_Click(object? sender, EventArgs e)
+        {
+            if (webView2.CoreWebView2?.CanGoBack == true)
+            {
+                webView2.CoreWebView2.GoBack();
+            }
+        }
+
+        private void ButtonHtmlForward_Click(object? sender, EventArgs e)
+        {
+            if (webView2.CoreWebView2?.CanGoForward == true)
+            {
+                webView2.CoreWebView2.GoForward();
+            }
+        }
+
+        private void ClearHtmlView()
+        {
+            textBoxHtmlUrl.Text = string.Empty;
+
+            if (IsControlDetached(webView2, detachedHtmlHost))
+            {
+                DockWebView2();
+            }
+
+            ResetWebView2();
+            ResetHtmlViewOptions();
+            SetHtmlMode(false);
+        }
+
+        private void ResetWebView2()
+        {
+            var previous = webView2;
+            if (previous != null)
+            {
+                try
+                {
+                    if (previous.CoreWebView2 != null)
+                    {
+                        previous.CoreWebView2.HistoryChanged -= WebView2_HistoryChanged;
+                        previous.CoreWebView2.NavigationCompleted -= WebView2_NavigationCompleted;
+                        previous.CoreWebView2.WebMessageReceived -= WebView2_WebMessageReceived;
+                    }
+                }
+                catch
+                {
+                    // Best-effort cleanup only.
+                }
+
+                if (previous.Parent != null)
+                {
+                    previous.Parent.Controls.Remove(previous);
+                }
+
+                previous.Dispose();
+            }
+
+            webView2 = new Microsoft.Web.WebView2.WinForms.WebView2
+            {
+                AllowExternalDrop = true,
+                CreationProperties = null,
+                DefaultBackgroundColor = Color.White,
+                Dock = DockStyle.Fill,
+                Location = new Point(0, 0),
+                Name = "webView2",
+                TabIndex = 1,
+                ZoomFactor = 1D
+            };
+
+            panelHtmlHost.Controls.Add(webView2);
+            webView2Initialization = null;
+            htmlRootFolder = null;
+            UpdateHtmlNavButtons();
+        }
+
+        private async void ButtonHtmlBrowse_Click(object? sender, EventArgs e)
+        {
+            using var dialog = new OpenFileDialog
+            {
+                Filter = "HTML files (*.html;*.htm)|*.html;*.htm|All files (*.*)|*.*",
+                Title = "Open HTML File"
+            };
+
+            if (dialog.ShowDialog(this) != DialogResult.OK)
+            {
+                return;
+            }
+
+            textBoxHtmlUrl.Text = dialog.FileName;
+            await LoadHtmlFileAsync(dialog.FileName);
+        }
+
+        private async void TextBoxHtmlUrl_KeyDown(object? sender, KeyEventArgs e)
+        {
+            if (e.KeyCode != Keys.Enter)
+            {
+                return;
+            }
+
+            e.SuppressKeyPress = true;
+            await LoadHtmlFromInputAsync();
+        }
+
+        private async Task LoadHtmlFromInputAsync()
+        {
+            string input = textBoxHtmlUrl.Text.Trim();
+            if (string.IsNullOrEmpty(input))
+            {
+                return;
+            }
+
+            string? localPath = TryGetLocalHtmlPath(input);
+            if (!string.IsNullOrEmpty(localPath))
+            {
+                await LoadHtmlFileAsync(localPath);
+                return;
+            }
+
+            if (!TryNormalizeUrl(input, out Uri? uri) || uri == null)
+            {
+                return;
+            }
+
+            textBoxHtmlUrl.Text = uri.ToString();
+            await NavigateToUrlAsync(uri);
+        }
+
+        private static string? TryGetLocalHtmlPath(string input)
+        {
+            if (Uri.TryCreate(input, UriKind.Absolute, out Uri? uri) && uri.IsFile)
+            {
+                return File.Exists(uri.LocalPath) ? uri.LocalPath : null;
+            }
+
+            try
+            {
+                string fullPath = Path.GetFullPath(input);
+                return File.Exists(fullPath) ? fullPath : null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static bool TryNormalizeUrl(string input, out Uri? uri)
+        {
+            if (Uri.TryCreate(input, UriKind.Absolute, out uri))
+            {
+                return true;
+            }
+
+            return Uri.TryCreate("https://" + input, UriKind.Absolute, out uri);
+        }
+
+        private async Task NavigateToUrlAsync(Uri uri)
+        {
+            await EnsureWebView2InitializedAsync();
+
+            if (!string.Equals(uri.Host, HtmlHostName, StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrEmpty(htmlRootFolder) &&
+                webView2.CoreWebView2 != null)
+            {
+                webView2.CoreWebView2.ClearVirtualHostNameToFolderMapping(HtmlHostName);
+                htmlRootFolder = null;
+            }
+
+            webView2.Source = uri;
+            SetHtmlMode(true);
         }
 
         private async void RichTextBox1_TextChanged(object? sender, EventArgs e)
@@ -1631,6 +2229,7 @@ namespace RadEdit
             detachedHtmlHost.Show(this);
             detachedHtmlHost.BringToFront();
             toolStripPopHtmlButton.Text = "Dock HTML";
+            UpdateHtmlPanelLayout();
         }
 
         private void DockWebView2()
@@ -1640,9 +2239,10 @@ namespace RadEdit
                 return;
             }
 
-            MoveControl(webView2, splitContainer1.Panel2);
+            MoveControl(webView2, panelHtmlHost);
             detachedHtmlHost.Hide();
             toolStripPopHtmlButton.Text = "Pop HTML";
+            UpdateHtmlPanelLayout();
         }
 
         private void DetachRichTextBox()
@@ -1747,6 +2347,28 @@ namespace RadEdit
 
             string result = builder.ToString().Trim();
             return string.IsNullOrEmpty(result) ? "RadEdit" : result;
+        }
+
+        private static string GetAppVersion()
+        {
+            string? infoVersion = Assembly.GetExecutingAssembly()
+                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+                ?.InformationalVersion;
+
+            if (!string.IsNullOrWhiteSpace(infoVersion))
+            {
+                string trimmed = infoVersion.Trim();
+                int plusIndex = trimmed.IndexOf('+');
+                return plusIndex > 0 ? trimmed.Substring(0, plusIndex) : trimmed;
+            }
+
+            string fallback = Application.ProductVersion ?? string.Empty;
+            if (Version.TryParse(fallback, out Version? parsed))
+            {
+                return $"{parsed.Major}.{parsed.Minor}";
+            }
+
+            return "0.2";
         }
 
         private static class NativeMethods
