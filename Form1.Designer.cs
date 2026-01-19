@@ -37,8 +37,18 @@ namespace RadEdit
             toolStripItalicButton = new ToolStripButton();
             toolStripPopHtmlButton = new ToolStripButton();
             toolStripPopRtfButton = new ToolStripButton();
+            panelLtBar = new Panel();
+            flowLtBar = new FlowLayoutPanel();
+            labelLtStatus = new Label();
+            checkBoxLtEnabled = new CheckBox();
+            buttonLtPrev = new Button();
+            buttonLtNext = new Button();
+            comboLtSuggestions = new ComboBox();
+            buttonLtApply = new Button();
+            buttonLtIgnore = new Button();
+            buttonLtCheck = new Button();
             splitContainer1 = new SplitContainer();
-            richTextBox1 = new RichTextBox();
+            richTextBox1 = new LanguageToolRichTextBox();
             panelHtmlBar = new Panel();
             panelHtmlHost = new Panel();
             buttonHtmlBack = new Button();
@@ -50,6 +60,8 @@ namespace RadEdit
             webView2 = new Microsoft.Web.WebView2.WinForms.WebView2();
             toolStrip1.SuspendLayout();
             toolStripButtons.SuspendLayout();
+            panelLtBar.SuspendLayout();
+            flowLtBar.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)webView2).BeginInit();
             ((System.ComponentModel.ISupportInitialize)splitContainer1).BeginInit();
             splitContainer1.Panel1.SuspendLayout();
@@ -151,10 +163,124 @@ namespace RadEdit
             toolStripPopRtfButton.ToolTipText = "Pop out the RichText view";
             toolStripPopRtfButton.Click += ToolStripPopRtfButton_Click;
             // 
+            // panelLtBar
+            // 
+            panelLtBar.Controls.Add(flowLtBar);
+            panelLtBar.Dock = DockStyle.Top;
+            panelLtBar.Location = new Point(0, 54);
+            panelLtBar.Name = "panelLtBar";
+            panelLtBar.Padding = new Padding(6, 3, 6, 3);
+            panelLtBar.Size = new Size(800, 30);
+            panelLtBar.TabIndex = 2;
+            // 
+            // flowLtBar
+            // 
+            flowLtBar.Controls.Add(labelLtStatus);
+            flowLtBar.Controls.Add(checkBoxLtEnabled);
+            flowLtBar.Controls.Add(buttonLtPrev);
+            flowLtBar.Controls.Add(buttonLtNext);
+            flowLtBar.Controls.Add(comboLtSuggestions);
+            flowLtBar.Controls.Add(buttonLtApply);
+            flowLtBar.Controls.Add(buttonLtIgnore);
+            flowLtBar.Controls.Add(buttonLtCheck);
+            flowLtBar.Dock = DockStyle.Fill;
+            flowLtBar.FlowDirection = FlowDirection.LeftToRight;
+            flowLtBar.Location = new Point(6, 3);
+            flowLtBar.Name = "flowLtBar";
+            flowLtBar.Size = new Size(788, 24);
+            flowLtBar.TabIndex = 0;
+            flowLtBar.WrapContents = false;
+            // 
+            // labelLtStatus
+            // 
+            labelLtStatus.AutoSize = true;
+            labelLtStatus.Margin = new Padding(0, 4, 10, 0);
+            labelLtStatus.Name = "labelLtStatus";
+            labelLtStatus.Size = new Size(68, 15);
+            labelLtStatus.TabIndex = 0;
+            labelLtStatus.Text = "LT: ready";
+            // 
+            // checkBoxLtEnabled
+            // 
+            checkBoxLtEnabled.AutoSize = true;
+            checkBoxLtEnabled.Checked = true;
+            checkBoxLtEnabled.CheckState = CheckState.Checked;
+            checkBoxLtEnabled.Margin = new Padding(0, 4, 10, 0);
+            checkBoxLtEnabled.Name = "checkBoxLtEnabled";
+            checkBoxLtEnabled.Size = new Size(38, 19);
+            checkBoxLtEnabled.TabIndex = 1;
+            checkBoxLtEnabled.Text = "LT";
+            checkBoxLtEnabled.UseVisualStyleBackColor = true;
+            checkBoxLtEnabled.CheckedChanged += CheckBoxLtEnabled_CheckedChanged;
+            // 
+            // buttonLtPrev
+            // 
+            buttonLtPrev.AutoSize = true;
+            buttonLtPrev.Location = new Point(129, 0);
+            buttonLtPrev.Name = "buttonLtPrev";
+            buttonLtPrev.Size = new Size(53, 23);
+            buttonLtPrev.TabIndex = 2;
+            buttonLtPrev.Text = "Prev";
+            buttonLtPrev.UseVisualStyleBackColor = true;
+            buttonLtPrev.Click += ButtonLtPrev_Click;
+            // 
+            // buttonLtNext
+            // 
+            buttonLtNext.AutoSize = true;
+            buttonLtNext.Location = new Point(188, 0);
+            buttonLtNext.Name = "buttonLtNext";
+            buttonLtNext.Size = new Size(52, 23);
+            buttonLtNext.TabIndex = 3;
+            buttonLtNext.Text = "Next";
+            buttonLtNext.UseVisualStyleBackColor = true;
+            buttonLtNext.Click += ButtonLtNext_Click;
+            // 
+            // comboLtSuggestions
+            // 
+            comboLtSuggestions.DropDownStyle = ComboBoxStyle.DropDownList;
+            comboLtSuggestions.FormattingEnabled = true;
+            comboLtSuggestions.Location = new Point(246, 0);
+            comboLtSuggestions.Name = "comboLtSuggestions";
+            comboLtSuggestions.Size = new Size(240, 23);
+            comboLtSuggestions.TabIndex = 4;
+            // 
+            // buttonLtApply
+            // 
+            buttonLtApply.AutoSize = true;
+            buttonLtApply.Location = new Point(492, 0);
+            buttonLtApply.Name = "buttonLtApply";
+            buttonLtApply.Size = new Size(55, 23);
+            buttonLtApply.TabIndex = 5;
+            buttonLtApply.Text = "Apply";
+            buttonLtApply.UseVisualStyleBackColor = true;
+            buttonLtApply.Click += ButtonLtApply_Click;
+            // 
+            // buttonLtIgnore
+            // 
+            buttonLtIgnore.AutoSize = true;
+            buttonLtIgnore.Location = new Point(553, 0);
+            buttonLtIgnore.Name = "buttonLtIgnore";
+            buttonLtIgnore.Size = new Size(56, 23);
+            buttonLtIgnore.TabIndex = 6;
+            buttonLtIgnore.Text = "Ignore";
+            buttonLtIgnore.UseVisualStyleBackColor = true;
+            buttonLtIgnore.Click += ButtonLtIgnore_Click;
+            // 
+            // buttonLtCheck
+            // 
+            buttonLtCheck.AutoSize = true;
+            buttonLtCheck.Location = new Point(615, 0);
+            buttonLtCheck.Name = "buttonLtCheck";
+            buttonLtCheck.Size = new Size(78, 23);
+            buttonLtCheck.TabIndex = 7;
+            buttonLtCheck.Text = "Check Now";
+            buttonLtCheck.UseVisualStyleBackColor = true;
+            buttonLtCheck.Click += ButtonLtCheck_Click;
+            // 
             // splitContainer1
             // 
             splitContainer1.Dock = DockStyle.Fill;
-            splitContainer1.Location = new Point(0, 54);
+            splitContainer1.Location = new Point(0, 84);
             splitContainer1.Name = "splitContainer1";
             splitContainer1.Orientation = Orientation.Horizontal;
             // 
@@ -166,9 +292,9 @@ namespace RadEdit
             // 
             splitContainer1.Panel2.Controls.Add(panelHtmlHost);
             splitContainer1.Panel2.Controls.Add(panelHtmlBar);
-            splitContainer1.Size = new Size(800, 396);
+            splitContainer1.Size = new Size(800, 366);
             splitContainer1.SplitterDistance = 198;
-            splitContainer1.TabIndex = 2;
+            splitContainer1.TabIndex = 3;
             // 
             // richTextBox1
             // 
@@ -292,6 +418,7 @@ namespace RadEdit
             AutoScaleMode = AutoScaleMode.Font;
             ClientSize = new Size(800, 450);
             Controls.Add(splitContainer1);
+            Controls.Add(panelLtBar);
             Controls.Add(toolStripButtons);
             Controls.Add(toolStrip1);
             Name = "Form1";
@@ -300,6 +427,9 @@ namespace RadEdit
             toolStrip1.PerformLayout();
             toolStripButtons.ResumeLayout(false);
             toolStripButtons.PerformLayout();
+            panelLtBar.ResumeLayout(false);
+            flowLtBar.ResumeLayout(false);
+            flowLtBar.PerformLayout();
             ((System.ComponentModel.ISupportInitialize)webView2).EndInit();
             splitContainer1.Panel1.ResumeLayout(false);
             splitContainer1.Panel2.ResumeLayout(false);
@@ -322,8 +452,18 @@ namespace RadEdit
         private ToolStripButton toolStripItalicButton;
         private ToolStripButton toolStripPopHtmlButton;
         private ToolStripButton toolStripPopRtfButton;
+        private Panel panelLtBar;
+        private FlowLayoutPanel flowLtBar;
+        private Label labelLtStatus;
+        private CheckBox checkBoxLtEnabled;
+        private Button buttonLtPrev;
+        private Button buttonLtNext;
+        private ComboBox comboLtSuggestions;
+        private Button buttonLtApply;
+        private Button buttonLtIgnore;
+        private Button buttonLtCheck;
         private SplitContainer splitContainer1;
-        private RichTextBox richTextBox1;
+        private LanguageToolRichTextBox richTextBox1;
         private Panel panelHtmlBar;
         private Panel panelHtmlHost;
         private Button buttonHtmlBack;
