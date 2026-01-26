@@ -79,10 +79,10 @@ RadEdit listens for `WM_COPYDATA` messages whose `dwData` matches one of the fol
 | `GotoEnd` | 14 | *(ignored)* | Moves the caret to the end of the document (ignores trailing whitespace) and scrolls into view. |
 | `FixFont` | 15 | Optional font name, size, or `name;size` | Applies a font face/size to the entire document. Empty payload defaults to Arial 10. |
 | `CleanUpEnd` | 16 | *(ignored)* | Trims trailing whitespace at the end of the document. |
-| `SetHtmlFile` | 17 | File path | Loads the HTML file in WebView2 and switches the UI into HTML mode. |
+| `SetHtmlFile` | 17 | File path | Loads the HTML file in WebView2 and shows the HTML view alongside the RTF editor. |
 | `RequestHtmlFile` | 18 | Optional path or filename | Exports the current DOM (including filled form values) to an HTML file and returns the absolute path via `HtmlFileResponse`. Uses the same `%TEMP%`/absolute path rules as `RequestTempFile`. If HTML mode is not active, RadEdit emits `ErrorResponse`. |
 | `HtmlFileResponse` | 19 | File path | Response emitted by RadEdit for `RequestHtmlFile`. |
-| `SetDataContext` | 20 | JSON object | Merges the supplied JSON object into the current data context (each key updates or adds without clearing missing keys). Empty payload clears the context. To replace entirely, send `{"__mode":"replace","data":{...}}`. |
+| `SetDataContext` | 20 | JSON object | Merges the supplied JSON object into the current data context (each key updates or adds without clearing missing keys). Empty payload clears the context. To replace entirely, send `{"__mode":"replace","data":{...}}`. When HTML is loaded, matching `data-field` or `data-target-region` values are pushed into the HTML controls and the RTF regions. |
 | `GetDataContext` | 21 | Optional key path | Returns the full data context JSON when empty, or a single value when given a dotted path like `patient.id`. Missing keys return `null`. |
 | `DataContextResponse` | 22 | JSON | Response emitted by RadEdit for `GetDataContext`. |
 
@@ -154,6 +154,8 @@ SendCopyData(hwnd, command, text := "") {
 
 Run `examples\data-context-demo.ahk` to send a `SetDataContext` JSON payload and request the `patientId` back via `GetDataContext`. A `DataContextResponse` message box confirms the round trip.
 
+Run `examples\html-routing-setdatacontext-test.ahk` to load the HTML routing demo and send a richer `SetDataContext` payload that updates both HTML fields and RTF placeholders.
+
 ## HTML to RTF Routing
 
 When HTML mode is active, form fields can push text into hidden regions in the RTF. Define the region in the RTF with hidden markers:
@@ -176,6 +178,17 @@ Then add `data-target-region` in the HTML. When the field changes, RadEdit repla
 ```
 
 Checkboxes can use `data-map` with `true`/`false` keys. A working demo lives in `examples\html-routing-demo.html`, `examples\html-routing-demo.rtf`, and `examples\html-routing-demo.ahk`.
+
+## HTML Caching
+
+Local HTML files loaded through `SetHtmlFile` are served with `no-store` cache headers so edits are picked up immediately. Remote URLs keep the default WebView2 cache behavior.
+
+## HTML Popups
+
+`window.open` and `<a target="_blank">` open in a RadEdit-hosted window that keeps the same local folder mapping. A local popup test lives in:
+
+- `examples\webview-popup-test.html`
+- `examples\webview-popup-child.html`
 
 ## HTML View Metadata
 
