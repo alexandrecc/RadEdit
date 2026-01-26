@@ -65,10 +65,13 @@ SendRequests() {
     pendingKeys := ["patient.name.last", "study.accession", "flags.urgent"]
     expectedResponses := pendingKeys.Length
     ctxJson := '{' .
-        '"patient":{"id":"123456","name":{"first":"Ana","last":"Quinn"},"tags":["outpatient","followup"]},' .
-        '"study":{"accession":"ABC-2026-0001","modality":"CT","series":[{"id":"S1","desc":"Axial"},{"id":"S2","desc":"Coronal"}]},' .
-        '"flags":{"urgent":true,"approved":false},' .
-        '"measurements":{"sizes":[1.2,3.4,5.6]}' .
+        '"__mode":"replace",' .
+        '"data":{' .
+            '"patient":{"id":"123456","name":{"first":"Ana","last":"Quinn"},"tags":["outpatient","followup"]},' .
+            '"study":{"accession":"ABC-2026-0001","modality":"CT","series":[{"id":"S1","desc":"Axial"},{"id":"S2","desc":"Coronal"}]},' .
+            '"flags":{"urgent":true,"approved":false},' .
+            '"measurements":{"sizes":[1.2,3.4,5.6]}' .
+        '}' .
         '}'
     Log("Sending SetDataContext payload.")
     SendCopyData(target, CMD["SetDataContext"], ctxJson)

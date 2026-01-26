@@ -233,6 +233,30 @@ namespace RadEdit
         });
     };
 
+    let pendingDataContext = null;
+
+    const queueDataContext = (data) => {
+        if (!data || typeof data !== 'object') return;
+        if (pendingDataContext) {
+            Object.assign(pendingDataContext, data);
+        } else {
+            pendingDataContext = Object.assign({}, data);
+        }
+        if (document.readyState === 'loading') {
+            return;
+        }
+        const snapshot = pendingDataContext;
+        pendingDataContext = null;
+        applyDataContext(snapshot);
+    };
+
+    document.addEventListener('DOMContentLoaded', () => {
+        if (!pendingDataContext) return;
+        const snapshot = pendingDataContext;
+        pendingDataContext = null;
+        applyDataContext(snapshot);
+    });
+
     const handleEvent = (ev) => {
         const target = ev.target;
         if (!target || !target.closest) return;
@@ -266,7 +290,7 @@ namespace RadEdit
         window.chrome.webview.addEventListener('message', (event) => {
             const payload = event.data;
             if (!payload || payload.type !== 'dataContextUpdate') return;
-            applyDataContext(payload.data);
+            queueDataContext(payload.data);
         });
     }
 
@@ -657,6 +681,7 @@ namespace RadEdit
 
                 richTextBox1.Rtf = rtf;
             });
+            ApplyStoredDataContextToRtf();
             return true;
         }
 
@@ -668,6 +693,7 @@ namespace RadEdit
             }
 
             RunProgrammaticRtfUpdate(() => richTextBox1.SelectedRtf = rtf);
+            ApplyStoredDataContextToRtf();
             return true;
         }
 
@@ -695,6 +721,7 @@ namespace RadEdit
                 RunProgrammaticRtfUpdate(() => richTextBox1.SelectedRtf = buffer.Rtf);
             }
 
+            ApplyStoredDataContextToRtf();
             return true;
         }
 
@@ -3166,6 +3193,36 @@ namespace RadEdit
                     // Ignore failures if the WebView isn't ready.
                 }
             }));
+        }
+
+        private void ApplyStoredDataContextToRtf()
+        {
+            JsonObject snapshot;
+            lock (dataContextLock)
+            {
+                if (dataContext.Count == 0)
+                {
+                    return;
+                }
+
+                snapshot = (JsonObject)dataContext.DeepClone();
+            }
+
+            foreach (var kvp in snapshot)
+            {
+                if (string.IsNullOrWhiteSpace(kvp.Key))
+                {
+                    continue;
+                }
+
+                if (string.Equals(kvp.Key, DataContextModeKey, StringComparison.Ordinal) ||
+                    string.Equals(kvp.Key, DataContextDataKey, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                TryUpdateRtfRegion(kvp.Key, NormalizeDataContextValue(kvp.Value));
+            }
         }
 
         private static string NormalizeDataContextValue(JsonNode? value)
