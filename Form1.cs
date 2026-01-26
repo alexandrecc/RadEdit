@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Globalization;
+using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -166,6 +168,119 @@ namespace RadEdit
             public string? Text { get; set; }
         }
 
+        private sealed class LanguageToolIssue
+        {
+            private readonly List<string> replacements;
+
+            public LanguageToolIssue(int offset, int length, string message, string ruleId, List<string> replacements)
+            {
+                Offset = offset;
+                Length = length;
+                Message = message;
+                RuleId = ruleId;
+                this.replacements = replacements;
+            }
+
+            public int Offset { get; set; }
+            public int Length { get; set; }
+            public string Message { get; }
+            public string RuleId { get; }
+            public IReadOnlyList<string> Replacements => replacements;
+        }
+
+        private sealed class LanguageToolClient : IDisposable
+        {
+            private readonly HttpClient httpClient;
+            private readonly Uri checkUri;
+
+            public LanguageToolClient(string baseUrl)
+            {
+                httpClient = new HttpClient
+                {
+                    Timeout = TimeSpan.FromSeconds(LanguageToolTimeoutSeconds)
+                };
+                checkUri = new Uri(new Uri(baseUrl), "/v2/check");
+            }
+
+            public async Task<List<LanguageToolIssue>> CheckAsync(string text, string language, CancellationToken cancellationToken)
+            {
+                var form = new Dictionary<string, string>
+                {
+                    ["text"] = text,
+                    ["language"] = language
+                };
+                if (LanguageToolEnabledCategories.Length > 0)
+                {
+                    form["enabledOnly"] = "true";
+                    form["enabledCategories"] = string.Join(",", LanguageToolEnabledCategories);
+                }
+
+                using var content = new FormUrlEncodedContent(form);
+                using var response = await httpClient.PostAsync(checkUri, content, cancellationToken);
+                response.EnsureSuccessStatusCode();
+
+                using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+                using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+
+                var results = new List<LanguageToolIssue>();
+                if (doc.RootElement.TryGetProperty("matches", out var matches) &&
+                    matches.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var match in matches.EnumerateArray())
+                    {
+                        if (!match.TryGetProperty("offset", out var offsetElement) ||
+                            !offsetElement.TryGetInt32(out int offset))
+                        {
+                            continue;
+                        }
+
+                        if (!match.TryGetProperty("length", out var lengthElement) ||
+                            !lengthElement.TryGetInt32(out int length))
+                        {
+                            continue;
+                        }
+
+                        string message = match.TryGetProperty("message", out var messageElement)
+                            ? messageElement.GetString() ?? string.Empty
+                            : string.Empty;
+
+                        string ruleId = string.Empty;
+                        if (match.TryGetProperty("rule", out var ruleElement) &&
+                            ruleElement.TryGetProperty("id", out var idElement))
+                        {
+                            ruleId = idElement.GetString() ?? string.Empty;
+                        }
+
+                        var replacements = new List<string>();
+                        if (match.TryGetProperty("replacements", out var replElement) &&
+                            replElement.ValueKind == JsonValueKind.Array)
+                        {
+                            foreach (var repl in replElement.EnumerateArray())
+                            {
+                                if (repl.TryGetProperty("value", out var valueElement))
+                                {
+                                    string? value = valueElement.GetString();
+                                    if (!string.IsNullOrWhiteSpace(value))
+                                    {
+                                        replacements.Add(value);
+                                    }
+                                }
+                            }
+                        }
+
+                        results.Add(new LanguageToolIssue(offset, length, message, ruleId, replacements));
+                    }
+                }
+
+                return results;
+            }
+
+            public void Dispose()
+            {
+                httpClient.Dispose();
+            }
+        }
+
         private static class RichEditNative
         {
             public const int WM_USER = 0x0400;
@@ -228,6 +343,24 @@ namespace RadEdit
 
         private const string HtmlHostName = "radedit.local";
         private const string HtmlLanguage = "fr-CA";
+        private const string LanguageToolBaseUrl = "http://localhost:8081";
+        private const string LanguageToolLanguage = "fr";
+        private const int LanguageToolDebounceMs = 700;
+        private const int LanguageToolTimeoutSeconds = 25;
+        private const int LanguageToolStartupProbeTimeoutSeconds = 3;
+        private const string LanguageToolStartupProbeText = "Bonjour.";
+        private static readonly string[] LanguageToolEnabledCategories =
+        {
+            "CAT_REGLES_DE_BASE",
+            "AGREEMENT",
+            "CAT_GRAMMAIRE"
+        };
+        private const string LanguageToolIgnoreFileName = "languagetool-ignored-rules.json";
+        private const int HotkeyApplyId = 0x1A01;
+        private const int HotkeyIgnoreId = 0x1A02;
+        private const int HotkeyModifiers = NativeMethods.MOD_CONTROL | NativeMethods.MOD_ALT;
+        private const int HotkeyApplyKey = NativeMethods.VK_F11;
+        private const int HotkeyIgnoreKey = NativeMethods.VK_F12;
         private const int HtmlBarHeightFallback = 30;
         private const double DefaultHtmlSplitPercent = 0.5;
         private const int HtmlMetaSampleLimit = 65536;
@@ -246,19 +379,52 @@ namespace RadEdit
         private bool allowRtfUpdatesWhileHtmlFocus;
         private readonly object dataContextLock = new();
         private JsonObject dataContext = new();
+        private readonly LanguageToolClient languageToolClient;
+        private readonly System.Windows.Forms.Timer languageToolTimer = new();
+        private CancellationTokenSource? languageToolCts;
+        private string pendingLanguageToolText = string.Empty;
+        private string lastLanguageToolText = string.Empty;
+        private readonly List<LanguageToolIssue> languageToolIssues = new();
+        private readonly List<TextRange> languageToolHighlightedRanges = new();
+        private string languageToolHighlightSnapshotText = string.Empty;
+        private TextRange? languageToolActiveRange;
+        private int languageToolIssueIndex = -1;
+        private readonly HashSet<string> ignoredLanguageToolRules = new(StringComparer.Ordinal);
+        private readonly string languageToolIgnorePath;
+        private bool languageToolEnabled = true;
+        private string languageToolStatusText = "LT: ready";
+        private bool languageToolBusy;
+        private bool languageToolOffline;
+        private readonly ContextMenuStrip languageToolHoverMenu = new();
+        private LanguageToolIssue? languageToolHoverIssue;
+        private bool hotkeyApplyRegistered;
+        private bool hotkeyIgnoreRegistered;
 
         public Form1()
         {
             InitializeComponent();
+            languageToolClient = new LanguageToolClient(LanguageToolBaseUrl);
+            languageToolTimer.Interval = LanguageToolDebounceMs;
+            languageToolTimer.Tick += LanguageToolTimer_Tick;
+            languageToolIgnorePath = GetLanguageToolIgnorePath();
+            LoadIgnoredLanguageToolRules();
+            languageToolHoverMenu.ShowImageMargin = false;
+            languageToolHoverMenu.ShowCheckMargin = false;
             Text = $"RadEdit V{GetAppVersion()}";
             SetDefaultTypingFont("Arial", 10f);
             richTextBox1.SelectionChanged += RichTextBox1_SelectionChanged;
             richTextBox1.TextChanged += RichTextBox1_TextChanged;
+            richTextBox1.MouseMove += RichTextBox1_MouseMove;
+            richTextBox1.MouseLeave += RichTextBox1_MouseLeave;
+            richTextBox1.MouseDown += RichTextBox1_MouseDown;
             splitContainer1.SizeChanged += SplitContainer1_SizeChanged;
             lastPlainText = richTextBox1.Text;
             lastRtfSnapshot = richTextBox1.Rtf ?? string.Empty;
             UpdateFormattingButtons();
             SetHtmlMode(false);
+            UpdateLanguageToolStatus(languageToolStatusText);
+            UpdateLanguageToolBarState();
+            checkBoxLtEnabled.Checked = true;
         }
 
         protected override void WndProc(ref Message m)
@@ -285,7 +451,32 @@ namespace RadEdit
                 return;
             }
 
+            if (m.Msg == NativeMethods.WM_HOTKEY)
+            {
+                HandleHotkey(m.WParam);
+                m.Result = IntPtr.Zero;
+                return;
+            }
+
             base.WndProc(ref m);
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            RegisterGlobalHotkeys();
+        }
+
+        protected override void OnHandleDestroyed(EventArgs e)
+        {
+            UnregisterGlobalHotkeys();
+            base.OnHandleDestroyed(e);
+        }
+
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            _ = ProbeLanguageToolStatusAsync();
         }
 
         private bool HandleCopyDataCommand(CopyDataCommand command, string payload, IntPtr senderHandle)
@@ -1289,6 +1480,7 @@ namespace RadEdit
             {
                 lastPlainText = newText;
                 lastRtfSnapshot = richTextBox1.Rtf ?? string.Empty;
+                ScheduleLanguageToolCheck(newText);
                 return;
             }
 
@@ -1418,6 +1610,1014 @@ namespace RadEdit
         private bool IsHtmlMirroringAvailable()
         {
             return webView2.Source != null && webView2.ContainsFocus;
+        }
+
+        private void ScheduleLanguageToolCheck(string text, bool force = false)
+        {
+            if (!languageToolEnabled)
+            {
+                return;
+            }
+
+            if (string.IsNullOrEmpty(text))
+            {
+                ClearLanguageToolIssues();
+                return;
+            }
+
+            UpdateLanguageToolHighlightRanges(text);
+            UpdateLanguageToolUnderlineRanges();
+            if (languageToolOffline && !force)
+            {
+                return;
+            }
+            if (!force && string.Equals(text, lastLanguageToolText, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            pendingLanguageToolText = text;
+            languageToolTimer.Stop();
+            languageToolTimer.Start();
+            UpdateLanguageToolStatus("LT: checking...");
+        }
+
+        private async Task ProbeLanguageToolStatusAsync()
+        {
+            if (!languageToolEnabled)
+            {
+                return;
+            }
+
+            UpdateLanguageToolStatus("LT: checking...");
+
+            try
+            {
+                using var probeCts = new CancellationTokenSource(TimeSpan.FromSeconds(LanguageToolStartupProbeTimeoutSeconds));
+                await languageToolClient.CheckAsync(LanguageToolStartupProbeText, LanguageToolLanguage, probeCts.Token);
+                if (!languageToolEnabled)
+                {
+                    return;
+                }
+
+                languageToolOffline = false;
+                UpdateLanguageToolStatus("LT: ready");
+            }
+            catch (TaskCanceledException)
+            {
+                languageToolOffline = true;
+                UpdateLanguageToolStatus("LT: offline");
+                ClearLanguageToolIssues(true);
+            }
+            catch (OperationCanceledException)
+            {
+                // Ignore explicit cancellation (shutdown/disable).
+            }
+            catch (HttpRequestException)
+            {
+                languageToolOffline = true;
+                UpdateLanguageToolStatus("LT: offline");
+                ClearLanguageToolIssues(true);
+            }
+        }
+
+        private static string GetLanguageToolIgnorePath()
+        {
+            string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            return Path.Combine(appData, "RadEdit", LanguageToolIgnoreFileName);
+        }
+
+        private void LoadIgnoredLanguageToolRules()
+        {
+            if (string.IsNullOrWhiteSpace(languageToolIgnorePath) || !File.Exists(languageToolIgnorePath))
+            {
+                return;
+            }
+
+            try
+            {
+                string json = File.ReadAllText(languageToolIgnorePath);
+                string[]? rules = JsonSerializer.Deserialize<string[]>(json);
+                if (rules == null)
+                {
+                    return;
+                }
+
+                ignoredLanguageToolRules.Clear();
+                foreach (string rule in rules)
+                {
+                    if (!string.IsNullOrWhiteSpace(rule))
+                    {
+                        ignoredLanguageToolRules.Add(rule.Trim());
+                    }
+                }
+            }
+            catch
+            {
+                // Best-effort persistence only.
+            }
+        }
+
+        private void SaveIgnoredLanguageToolRules()
+        {
+            try
+            {
+                string? directory = Path.GetDirectoryName(languageToolIgnorePath);
+                if (!string.IsNullOrEmpty(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+
+                var rules = new List<string>(ignoredLanguageToolRules);
+                rules.Sort(StringComparer.Ordinal);
+                string json = JsonSerializer.Serialize(rules, new JsonSerializerOptions { WriteIndented = true });
+                File.WriteAllText(languageToolIgnorePath, json);
+            }
+            catch
+            {
+                // Best-effort persistence only.
+            }
+        }
+
+        private async void LanguageToolTimer_Tick(object? sender, EventArgs e)
+        {
+            languageToolTimer.Stop();
+            await RunLanguageToolCheckAsync(pendingLanguageToolText);
+        }
+
+        private async Task RunLanguageToolCheckAsync(string text)
+        {
+            if (!languageToolEnabled)
+            {
+                return;
+            }
+
+            languageToolCts?.Cancel();
+            languageToolCts?.Dispose();
+            languageToolCts = new CancellationTokenSource();
+
+            if (string.IsNullOrEmpty(text))
+            {
+                ClearLanguageToolIssues();
+                return;
+            }
+
+            languageToolBusy = true;
+            UpdateLanguageToolBarState();
+            UpdateLanguageToolStatus("LT: checking...");
+
+            string snapshot = text;
+
+            try
+            {
+                var issues = await languageToolClient.CheckAsync(snapshot, LanguageToolLanguage, languageToolCts.Token);
+                languageToolOffline = false;
+                if (!string.Equals(snapshot, richTextBox1.Text, StringComparison.Ordinal))
+                {
+                    pendingLanguageToolText = richTextBox1.Text;
+                    languageToolTimer.Start();
+                    return;
+                }
+
+                lastLanguageToolText = snapshot;
+                SetLanguageToolIssues(FilterIgnoredIssues(issues));
+            }
+            catch (TaskCanceledException)
+            {
+                UpdateLanguageToolStatus("LT: timeout");
+                ClearLanguageToolIssues(true);
+            }
+            catch (OperationCanceledException)
+            {
+                // Ignore cancellation from newer checks.
+            }
+            catch (HttpRequestException)
+            {
+                languageToolOffline = true;
+                UpdateLanguageToolStatus("LT: offline");
+                ClearLanguageToolIssues(true);
+            }
+            finally
+            {
+                languageToolBusy = false;
+                UpdateLanguageToolBarState();
+            }
+        }
+
+        private List<LanguageToolIssue> FilterIgnoredIssues(List<LanguageToolIssue> issues)
+        {
+            if (ignoredLanguageToolRules.Count == 0)
+            {
+                return issues;
+            }
+
+            var filtered = new List<LanguageToolIssue>(issues.Count);
+            foreach (var issue in issues)
+            {
+                if (string.IsNullOrEmpty(issue.RuleId) || !ignoredLanguageToolRules.Contains(issue.RuleId))
+                {
+                    filtered.Add(issue);
+                }
+            }
+
+            return filtered;
+        }
+
+        private void SetLanguageToolIssues(List<LanguageToolIssue> issues)
+        {
+            languageToolIssues.Clear();
+            languageToolIssues.AddRange(issues);
+            languageToolIssueIndex = languageToolIssues.Count > 0 ? 0 : -1;
+
+            UpdateActiveLanguageToolRange();
+            UpdateSuggestionList(GetCurrentIssue());
+            UpdateLanguageToolStatus($"LT: {languageToolIssues.Count} issue{(languageToolIssues.Count == 1 ? string.Empty : "s")}");
+            UpdateLanguageToolBarState();
+            HideLanguageToolHoverMenu();
+            RenderLanguageToolHighlights();
+        }
+
+        private void ClearLanguageToolIssues(bool preserveStatus = false)
+        {
+            languageToolIssues.Clear();
+            languageToolIssueIndex = -1;
+            languageToolActiveRange = null;
+            UpdateSuggestionList(null);
+            if (!preserveStatus)
+            {
+                UpdateLanguageToolStatus("LT: 0 issues");
+            }
+            UpdateLanguageToolBarState();
+            ClearLanguageToolHighlights();
+            HideLanguageToolHoverMenu();
+        }
+
+        private void UpdateLanguageToolStatus(string status)
+        {
+            languageToolStatusText = status;
+            labelLtStatus.Text = languageToolStatusText;
+        }
+
+        private void UpdateLanguageToolBarState()
+        {
+            if (!languageToolEnabled)
+            {
+                buttonLtPrev.Enabled = false;
+                buttonLtNext.Enabled = false;
+                buttonLtApply.Enabled = false;
+                buttonLtIgnore.Enabled = false;
+                comboLtSuggestions.Enabled = false;
+                buttonLtCheck.Enabled = false;
+                return;
+            }
+
+            bool hasIssues = languageToolIssues.Count > 0;
+            bool canNavigate = languageToolIssues.Count > 1;
+            var currentIssue = GetCurrentIssue();
+            bool hasSuggestions = currentIssue != null && currentIssue.Replacements.Count > 0;
+
+            buttonLtPrev.Enabled = canNavigate && !languageToolBusy;
+            buttonLtNext.Enabled = canNavigate && !languageToolBusy;
+            buttonLtApply.Enabled = hasIssues && hasSuggestions && !languageToolBusy;
+            buttonLtIgnore.Enabled = hasIssues && !languageToolBusy;
+            comboLtSuggestions.Enabled = hasIssues && hasSuggestions && !languageToolBusy;
+            buttonLtCheck.Enabled = !languageToolBusy;
+        }
+
+        private void CheckBoxLtEnabled_CheckedChanged(object? sender, EventArgs e)
+        {
+            SetLanguageToolEnabled(checkBoxLtEnabled.Checked);
+        }
+
+        private void SetLanguageToolEnabled(bool enabled)
+        {
+            if (languageToolEnabled == enabled)
+            {
+                return;
+            }
+
+            languageToolEnabled = enabled;
+
+            if (!enabled)
+            {
+                languageToolTimer.Stop();
+                languageToolCts?.Cancel();
+                ClearLanguageToolIssues(true);
+                UpdateLanguageToolStatus("LT: disabled");
+            }
+            else
+            {
+                UpdateLanguageToolStatus("LT: ready");
+                ScheduleLanguageToolCheck(richTextBox1.Text, true);
+            }
+
+            UpdateLanguageToolBarState();
+        }
+
+        private void HandleHotkey(IntPtr id)
+        {
+            if (!languageToolEnabled)
+            {
+                return;
+            }
+
+            int hotkeyId = id.ToInt32();
+            if (hotkeyId == HotkeyApplyId)
+            {
+                ApplyActiveIssueFromHotkey();
+                return;
+            }
+
+            if (hotkeyId == HotkeyIgnoreId)
+            {
+                IgnoreActiveIssueFromHotkey();
+            }
+        }
+
+        private void RegisterGlobalHotkeys()
+        {
+            if (!IsHandleCreated)
+            {
+                return;
+            }
+
+            hotkeyApplyRegistered = NativeMethods.RegisterHotKey(Handle, HotkeyApplyId, HotkeyModifiers, HotkeyApplyKey);
+            if (!hotkeyApplyRegistered)
+            {
+                LogDebug($"Failed to register apply hotkey (mod={HotkeyModifiers}, key={HotkeyApplyKey}).");
+            }
+
+            hotkeyIgnoreRegistered = NativeMethods.RegisterHotKey(Handle, HotkeyIgnoreId, HotkeyModifiers, HotkeyIgnoreKey);
+            if (!hotkeyIgnoreRegistered)
+            {
+                LogDebug($"Failed to register ignore hotkey (mod={HotkeyModifiers}, key={HotkeyIgnoreKey}).");
+            }
+        }
+
+        private void UnregisterGlobalHotkeys()
+        {
+            if (!IsHandleCreated)
+            {
+                return;
+            }
+
+            if (hotkeyApplyRegistered)
+            {
+                NativeMethods.UnregisterHotKey(Handle, HotkeyApplyId);
+                hotkeyApplyRegistered = false;
+            }
+
+            if (hotkeyIgnoreRegistered)
+            {
+                NativeMethods.UnregisterHotKey(Handle, HotkeyIgnoreId);
+                hotkeyIgnoreRegistered = false;
+            }
+        }
+
+        private void ApplyActiveIssueFromHotkey()
+        {
+            if (!languageToolEnabled)
+            {
+                return;
+            }
+
+            var issue = GetCurrentIssue();
+            if (issue == null)
+            {
+                return;
+            }
+
+            if (!EnsureCurrentIssueIsValid(issue))
+            {
+                return;
+            }
+
+            if (issue.Replacements.Count == 0)
+            {
+                return;
+            }
+
+            string replacement = issue.Replacements[0];
+            if (string.IsNullOrEmpty(replacement))
+            {
+                return;
+            }
+
+            RunProgrammaticRtfUpdate(() => ReplaceTextRange(issue.Offset, issue.Length, replacement));
+            HideLanguageToolHoverMenu();
+            RemoveIssueImmediately(issue, richTextBox1.Text);
+            ScheduleLanguageToolCheck(richTextBox1.Text, true);
+        }
+
+        private void IgnoreActiveIssueFromHotkey()
+        {
+            if (!languageToolEnabled)
+            {
+                return;
+            }
+
+            var issue = GetCurrentIssue();
+            if (issue == null)
+            {
+                return;
+            }
+
+            IgnoreLanguageToolIssue(issue);
+        }
+
+        private void RenderLanguageToolHighlights()
+        {
+            ClearLanguageToolHighlights();
+            if (languageToolIssues.Count == 0)
+            {
+                return;
+            }
+
+            ApplyLanguageToolHighlights(languageToolIssues);
+        }
+
+        private void UpdateLanguageToolHighlightRanges(string newText)
+        {
+            string oldText = languageToolHighlightSnapshotText;
+            if (string.Equals(oldText, newText, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            int oldLength = oldText.Length;
+            int newLength = newText.Length;
+            if (oldLength == 0)
+            {
+                languageToolHighlightedRanges.Clear();
+                languageToolIssues.Clear();
+                languageToolIssueIndex = -1;
+                languageToolHighlightSnapshotText = newText;
+                return;
+            }
+
+            int prefix = 0;
+            int maxPrefix = Math.Min(oldLength, newLength);
+            while (prefix < maxPrefix && oldText[prefix] == newText[prefix])
+            {
+                prefix++;
+            }
+
+            int suffix = 0;
+            int maxSuffix = Math.Min(oldLength - prefix, newLength - prefix);
+            while (suffix < maxSuffix &&
+                   oldText[oldLength - 1 - suffix] == newText[newLength - 1 - suffix])
+            {
+                suffix++;
+            }
+
+            int oldMiddleLength = oldLength - prefix - suffix;
+            int newMiddleLength = newLength - prefix - suffix;
+            int delta = newMiddleLength - oldMiddleLength;
+            int changeStart = prefix;
+            int changeEnd = prefix + oldMiddleLength;
+
+            for (int i = languageToolHighlightedRanges.Count - 1; i >= 0; i--)
+            {
+                var range = languageToolHighlightedRanges[i];
+                int start = range.Start;
+                int end = start + range.Length;
+
+                int newStart = MapHighlightPosition(start, changeStart, changeEnd, delta);
+                int newEnd = MapHighlightPosition(end, changeStart, changeEnd, delta);
+                int updatedLength = newEnd - newStart;
+
+                if (updatedLength <= 0 || newStart >= newLength)
+                {
+                    languageToolHighlightedRanges.RemoveAt(i);
+                    continue;
+                }
+
+                if (newStart < 0)
+                {
+                    newStart = 0;
+                }
+
+                if (newStart + updatedLength > newLength)
+                {
+                    updatedLength = newLength - newStart;
+                }
+
+                if (updatedLength <= 0)
+                {
+                    languageToolHighlightedRanges.RemoveAt(i);
+                    continue;
+                }
+
+                languageToolHighlightedRanges[i] = new TextRange(newStart, updatedLength);
+            }
+
+            for (int i = languageToolIssues.Count - 1; i >= 0; i--)
+            {
+                var issue = languageToolIssues[i];
+                int newStart = MapHighlightPosition(issue.Offset, changeStart, changeEnd, delta);
+                int newEnd = MapHighlightPosition(issue.Offset + issue.Length, changeStart, changeEnd, delta);
+                int updatedLength = newEnd - newStart;
+
+                if (updatedLength <= 0 || newStart >= newLength)
+                {
+                    languageToolIssues.RemoveAt(i);
+                    continue;
+                }
+
+                if (newStart < 0)
+                {
+                    newStart = 0;
+                }
+
+                if (newStart + updatedLength > newLength)
+                {
+                    updatedLength = newLength - newStart;
+                }
+
+                if (updatedLength <= 0)
+                {
+                    languageToolIssues.RemoveAt(i);
+                    continue;
+                }
+
+                issue.Offset = newStart;
+                issue.Length = updatedLength;
+            }
+
+            if (languageToolActiveRange.HasValue)
+            {
+                var active = languageToolActiveRange.Value;
+                int newStart = MapHighlightPosition(active.Start, changeStart, changeEnd, delta);
+                int newEnd = MapHighlightPosition(active.Start + active.Length, changeStart, changeEnd, delta);
+                int updatedLength = newEnd - newStart;
+
+                if (updatedLength <= 0 || newStart >= newLength)
+                {
+                    languageToolActiveRange = null;
+                }
+                else
+                {
+                    if (newStart < 0)
+                    {
+                        newStart = 0;
+                    }
+
+                    if (newStart + updatedLength > newLength)
+                    {
+                        updatedLength = newLength - newStart;
+                    }
+
+                    languageToolActiveRange = updatedLength > 0
+                        ? new TextRange(newStart, updatedLength)
+                        : null;
+                }
+            }
+
+            if (languageToolIssues.Count == 0)
+            {
+                languageToolIssueIndex = -1;
+                languageToolActiveRange = null;
+            }
+            else if (languageToolIssueIndex >= languageToolIssues.Count)
+            {
+                languageToolIssueIndex = languageToolIssues.Count - 1;
+                UpdateActiveLanguageToolRange();
+            }
+
+            languageToolHighlightSnapshotText = newText;
+        }
+
+        private static int MapHighlightPosition(int position, int changeStart, int changeEnd, int delta)
+        {
+            if (position < changeStart)
+            {
+                return position;
+            }
+
+            if (position >= changeEnd)
+            {
+                return position + delta;
+            }
+
+            return changeStart;
+        }
+
+        private void ClearLanguageToolHighlights()
+        {
+            if (languageToolHighlightedRanges.Count == 0)
+            {
+                return;
+            }
+
+            languageToolHighlightedRanges.Clear();
+            languageToolHighlightSnapshotText = richTextBox1.Text;
+            UpdateLanguageToolUnderlineRanges();
+        }
+
+        private void ApplyLanguageToolHighlights(IEnumerable<LanguageToolIssue> issues)
+        {
+            if (richTextBox1.TextLength == 0)
+            {
+                return;
+            }
+
+            try
+            {
+                int textLength = richTextBox1.TextLength;
+                foreach (var issue in issues)
+                {
+                    if (issue.Offset < 0 || issue.Offset >= textLength)
+                    {
+                        continue;
+                    }
+
+                    int length = Math.Min(issue.Length, textLength - issue.Offset);
+                    if (length <= 0)
+                    {
+                        continue;
+                    }
+
+                    languageToolHighlightedRanges.Add(new TextRange(issue.Offset, length));
+                }
+            }
+            finally
+            {
+                UpdateLanguageToolUnderlineRanges();
+            }
+
+            languageToolHighlightSnapshotText = richTextBox1.Text;
+        }
+
+        private void UpdateLanguageToolUnderlineRanges()
+        {
+            richTextBox1.SetUnderlineRanges(languageToolHighlightedRanges);
+            richTextBox1.SetActiveRange(languageToolActiveRange);
+        }
+
+        private void RichTextBox1_MouseMove(object? sender, MouseEventArgs e)
+        {
+            if (!languageToolEnabled || languageToolIssues.Count == 0)
+            {
+                HideLanguageToolHoverMenu();
+                return;
+            }
+
+            Point screenPoint = richTextBox1.PointToScreen(e.Location);
+            if (languageToolHoverMenu.Visible && languageToolHoverMenu.Bounds.Contains(screenPoint))
+            {
+                return;
+            }
+
+            int index = richTextBox1.GetCharIndexFromPosition(e.Location);
+            var issue = FindIssueAtIndex(index);
+            if (issue == null)
+            {
+                HideLanguageToolHoverMenu();
+                return;
+            }
+
+            if (ReferenceEquals(issue, languageToolHoverIssue) && languageToolHoverMenu.Visible)
+            {
+                return;
+            }
+
+            ShowLanguageToolHoverMenu(issue);
+        }
+
+        private void RichTextBox1_MouseLeave(object? sender, EventArgs e)
+        {
+            if (languageToolHoverMenu.Visible && !languageToolHoverMenu.Bounds.Contains(Cursor.Position))
+            {
+                HideLanguageToolHoverMenu();
+            }
+        }
+
+        private void RichTextBox1_MouseDown(object? sender, MouseEventArgs e)
+        {
+            if (languageToolHoverMenu.Visible)
+            {
+                HideLanguageToolHoverMenu();
+            }
+        }
+
+        private LanguageToolIssue? FindIssueAtIndex(int index)
+        {
+            if (index < 0)
+            {
+                return null;
+            }
+
+            foreach (var issue in languageToolIssues)
+            {
+                if (index >= issue.Offset && index < issue.Offset + issue.Length)
+                {
+                    return issue;
+                }
+            }
+
+            return null;
+        }
+
+        private void ShowLanguageToolHoverMenu(LanguageToolIssue issue)
+        {
+            languageToolHoverMenu.Items.Clear();
+
+            if (!string.IsNullOrWhiteSpace(issue.Message))
+            {
+                var header = new ToolStripMenuItem(issue.Message)
+                {
+                    Enabled = false
+                };
+                languageToolHoverMenu.Items.Add(header);
+            }
+
+            if (issue.Replacements.Count > 0)
+            {
+                foreach (string replacement in issue.Replacements)
+                {
+                    var item = new ToolStripMenuItem(replacement);
+                    item.Click += (_, _) => ApplyLanguageToolReplacement(issue, replacement);
+                    languageToolHoverMenu.Items.Add(item);
+                }
+            }
+            else
+            {
+                var none = new ToolStripMenuItem("(no suggestions)")
+                {
+                    Enabled = false
+                };
+                languageToolHoverMenu.Items.Add(none);
+            }
+
+            languageToolHoverMenu.Items.Add(new ToolStripSeparator());
+            var dismissItem = new ToolStripMenuItem("Dismiss");
+            dismissItem.Click += (_, _) => IgnoreLanguageToolIssue(issue);
+            languageToolHoverMenu.Items.Add(dismissItem);
+
+            languageToolHoverIssue = issue;
+
+            Point anchor = richTextBox1.GetPositionFromCharIndex(issue.Offset + issue.Length);
+            anchor.Y += (int)Math.Ceiling(richTextBox1.Font.GetHeight()) + 6;
+            languageToolHoverMenu.Show(richTextBox1, anchor);
+        }
+
+        private void HideLanguageToolHoverMenu()
+        {
+            if (!languageToolHoverMenu.Visible)
+            {
+                return;
+            }
+
+            languageToolHoverMenu.Hide();
+            languageToolHoverIssue = null;
+        }
+
+        private void ApplyLanguageToolReplacement(LanguageToolIssue issue, string replacement)
+        {
+            if (!EnsureCurrentIssueIsValid(issue))
+            {
+                return;
+            }
+
+            RunProgrammaticRtfUpdate(() => ReplaceTextRange(issue.Offset, issue.Length, replacement));
+            HideLanguageToolHoverMenu();
+            RemoveIssueImmediately(issue, richTextBox1.Text);
+            ScheduleLanguageToolCheck(richTextBox1.Text, true);
+        }
+
+        private void IgnoreLanguageToolIssue(LanguageToolIssue issue)
+        {
+            if (!string.IsNullOrEmpty(issue.RuleId))
+            {
+                ignoredLanguageToolRules.Add(issue.RuleId);
+                SaveIgnoredLanguageToolRules();
+            }
+
+            HideLanguageToolHoverMenu();
+            UpdateActiveLanguageToolRange();
+            ApplyLanguageToolIgnoreFilter();
+        }
+
+        private LanguageToolIssue? GetCurrentIssue()
+        {
+            if (languageToolIssueIndex < 0 || languageToolIssueIndex >= languageToolIssues.Count)
+            {
+                return null;
+            }
+
+            return languageToolIssues[languageToolIssueIndex];
+        }
+
+        private void MoveLanguageToolIndex(int delta)
+        {
+            if (languageToolIssues.Count == 0)
+            {
+                return;
+            }
+
+            int count = languageToolIssues.Count;
+            languageToolIssueIndex = (languageToolIssueIndex + delta) % count;
+            if (languageToolIssueIndex < 0)
+            {
+                languageToolIssueIndex += count;
+            }
+
+            var issue = languageToolIssues[languageToolIssueIndex];
+            UpdateActiveLanguageToolRange();
+            UpdateLanguageToolUnderlineRanges();
+            UpdateSuggestionList(issue);
+            UpdateLanguageToolBarState();
+            FocusIssue(issue);
+        }
+
+        private void UpdateSuggestionList(LanguageToolIssue? issue)
+        {
+            comboLtSuggestions.BeginUpdate();
+            try
+            {
+                comboLtSuggestions.Items.Clear();
+                if (issue == null || issue.Replacements.Count == 0)
+                {
+                    comboLtSuggestions.Items.Add("(no suggestions)");
+                    comboLtSuggestions.SelectedIndex = 0;
+                    comboLtSuggestions.Enabled = false;
+                    return;
+                }
+
+                foreach (string replacement in issue.Replacements)
+                {
+                    comboLtSuggestions.Items.Add(replacement);
+                }
+
+                comboLtSuggestions.SelectedIndex = 0;
+            }
+            finally
+            {
+                comboLtSuggestions.EndUpdate();
+            }
+        }
+
+        private void UpdateActiveLanguageToolRange()
+        {
+            var issue = GetCurrentIssue();
+            if (issue == null || issue.Length <= 0 || issue.Offset < 0 || issue.Offset >= richTextBox1.TextLength)
+            {
+                languageToolActiveRange = null;
+                return;
+            }
+
+            int length = Math.Min(issue.Length, richTextBox1.TextLength - issue.Offset);
+            if (length <= 0)
+            {
+                languageToolActiveRange = null;
+                return;
+            }
+
+            languageToolActiveRange = new TextRange(issue.Offset, length);
+        }
+
+        private void RemoveIssueImmediately(LanguageToolIssue issue, string newText)
+        {
+            int removedIndex = languageToolIssues.IndexOf(issue);
+            if (removedIndex >= 0)
+            {
+                languageToolIssues.RemoveAt(removedIndex);
+            }
+
+            for (int i = languageToolHighlightedRanges.Count - 1; i >= 0; i--)
+            {
+                var range = languageToolHighlightedRanges[i];
+                if (range.Start == issue.Offset && range.Length == issue.Length)
+                {
+                    languageToolHighlightedRanges.RemoveAt(i);
+                    break;
+                }
+            }
+
+            UpdateLanguageToolHighlightRanges(newText);
+            UpdateActiveLanguageToolRange();
+            UpdateSuggestionList(GetCurrentIssue());
+            UpdateLanguageToolStatus($"LT: {languageToolIssues.Count} issue{(languageToolIssues.Count == 1 ? string.Empty : "s")}");
+            UpdateLanguageToolBarState();
+            UpdateLanguageToolUnderlineRanges();
+        }
+
+        private bool EnsureCurrentIssueIsValid(LanguageToolIssue issue)
+        {
+            if (!string.Equals(lastLanguageToolText, richTextBox1.Text, StringComparison.Ordinal))
+            {
+                ScheduleLanguageToolCheck(richTextBox1.Text, true);
+                UpdateLanguageToolStatus("LT: text changed, recheck");
+                return false;
+            }
+
+            int end = issue.Offset + issue.Length;
+            if (issue.Offset < 0 || end > richTextBox1.TextLength)
+            {
+                UpdateLanguageToolStatus("LT: issue out of range");
+                return false;
+            }
+
+            return true;
+        }
+
+        private void FocusIssue(LanguageToolIssue issue)
+        {
+            if (issue.Offset < 0 || issue.Offset >= richTextBox1.TextLength)
+            {
+                return;
+            }
+
+            int length = Math.Min(issue.Length, richTextBox1.TextLength - issue.Offset);
+            richTextBox1.SelectionStart = issue.Offset;
+            richTextBox1.SelectionLength = length;
+            richTextBox1.ScrollToCaret();
+        }
+
+        private void ButtonLtPrev_Click(object? sender, EventArgs e)
+        {
+            MoveLanguageToolIndex(-1);
+        }
+
+        private void ButtonLtNext_Click(object? sender, EventArgs e)
+        {
+            MoveLanguageToolIndex(1);
+        }
+
+        private void ButtonLtApply_Click(object? sender, EventArgs e)
+        {
+            var issue = GetCurrentIssue();
+            if (issue == null)
+            {
+                return;
+            }
+
+            if (!EnsureCurrentIssueIsValid(issue))
+            {
+                return;
+            }
+
+            if (comboLtSuggestions.SelectedItem is not string replacement || string.IsNullOrEmpty(replacement))
+            {
+                return;
+            }
+
+            RunProgrammaticRtfUpdate(() => ReplaceTextRange(issue.Offset, issue.Length, replacement));
+            HideLanguageToolHoverMenu();
+            RemoveIssueImmediately(issue, richTextBox1.Text);
+            ScheduleLanguageToolCheck(richTextBox1.Text, true);
+        }
+
+        private void ButtonLtIgnore_Click(object? sender, EventArgs e)
+        {
+            var issue = GetCurrentIssue();
+            if (issue == null)
+            {
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(issue.RuleId))
+            {
+                ignoredLanguageToolRules.Add(issue.RuleId);
+                SaveIgnoredLanguageToolRules();
+            }
+
+            HideLanguageToolHoverMenu();
+            ApplyLanguageToolIgnoreFilter();
+        }
+
+        private void ApplyLanguageToolIgnoreFilter()
+        {
+            if (languageToolIssues.Count == 0)
+            {
+                UpdateLanguageToolBarState();
+                return;
+            }
+
+            for (int i = languageToolIssues.Count - 1; i >= 0; i--)
+            {
+                var issue = languageToolIssues[i];
+                if (!string.IsNullOrEmpty(issue.RuleId) && ignoredLanguageToolRules.Contains(issue.RuleId))
+                {
+                    languageToolIssues.RemoveAt(i);
+                }
+            }
+
+            if (languageToolIssueIndex >= languageToolIssues.Count)
+            {
+                languageToolIssueIndex = languageToolIssues.Count - 1;
+            }
+
+            UpdateActiveLanguageToolRange();
+            UpdateSuggestionList(GetCurrentIssue());
+            UpdateLanguageToolStatus($"LT: {languageToolIssues.Count} issue{(languageToolIssues.Count == 1 ? string.Empty : "s")}");
+            UpdateLanguageToolBarState();
+            RenderLanguageToolHighlights();
+        }
+
+        private void ButtonLtCheck_Click(object? sender, EventArgs e)
+        {
+            ScheduleLanguageToolCheck(richTextBox1.Text, true);
         }
 
         private void RunProgrammaticRtfUpdate(Action action)
@@ -2328,6 +3528,13 @@ namespace RadEdit
             isClosing = true;
             detachedHtmlHost?.Close();
             detachedRtfHost?.Close();
+            languageToolCts?.Cancel();
+            languageToolCts?.Dispose();
+            languageToolTimer.Stop();
+            languageToolTimer.Dispose();
+            languageToolClient.Dispose();
+            languageToolHoverMenu.Dispose();
+            UnregisterGlobalHotkeys();
             base.OnFormClosing(e);
         }
 
@@ -2374,6 +3581,12 @@ namespace RadEdit
         private static class NativeMethods
         {
             internal const int WM_COPYDATA = 0x004A;
+            internal const int WM_HOTKEY = 0x0312;
+            internal const int MOD_ALT = 0x0001;
+            internal const int MOD_CONTROL = 0x0002;
+            internal const int MOD_SHIFT = 0x0004;
+            internal const int VK_F11 = 0x7A;
+            internal const int VK_F12 = 0x7B;
 
             [StructLayout(LayoutKind.Sequential)]
             internal struct CopyDataStruct
@@ -2385,6 +3598,12 @@ namespace RadEdit
 
             [DllImport("user32.dll", CharSet = CharSet.Unicode)]
             private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, ref CopyDataStruct lParam);
+
+            [DllImport("user32.dll", SetLastError = true)]
+            internal static extern bool RegisterHotKey(IntPtr hWnd, int id, int fsModifiers, int vk);
+
+            [DllImport("user32.dll", SetLastError = true)]
+            internal static extern bool UnregisterHotKey(IntPtr hWnd, int id);
 
             internal static CopyDataStruct GetCopyData(IntPtr pointer)
             {

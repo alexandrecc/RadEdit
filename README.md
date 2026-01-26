@@ -14,6 +14,29 @@ dotnet run --project RadEdit.csproj
 
 A Debug build targets `net8.0-windows` and produces `bin\Debug\net8.0-windows\RadEdit.exe`.
 
+## LanguageTool (French) local server
+
+RadEdit does not bundle LanguageTool, but you can run a local French check server for autocorrection experiments.
+
+```powershell
+# download + unpack (stored under tools\languagetool)
+./scripts/setup-languagetool.ps1
+
+# start server on localhost:8081
+./scripts/start-languagetool-fr.ps1
+```
+
+Quick sanity check:
+
+```powershell
+Invoke-WebRequest -Uri "http://localhost:8081/v2/check" -Method Post -Body @{
+  text = "Je veut un example."
+  language = "fr"
+} | Select-Object -ExpandProperty Content
+```
+
+When integrating, call `/v2/check` with `language=fr` to force French rules.
+
 ## Shipping Single-File (no bundled WebView2 runtime)
 
 Publish a single-file release that uses the installed WebView2 Evergreen Runtime:
