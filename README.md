@@ -26,6 +26,8 @@ RadEdit does not bundle LanguageTool, but you can run a local French check serve
 ./scripts/start-languagetool-fr.ps1
 ```
 
+Manual download if needed: `https://languagetool.org/download/LanguageTool-6.5.zip`
+
 Quick sanity check:
 
 ```powershell
