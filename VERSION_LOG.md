@@ -1,6 +1,6 @@
 # Version Log
 
-## v0.2.1
+## v0.2.1 - 2026-01-25
 
 Changes since the previous version:
 
@@ -16,7 +16,7 @@ Changes since the previous version:
 - Updated RTF region markers to use @@BEGIN/@@END to avoid Dragon bracket parsing.
 - Added WebView2 popup test assets for local relative path validation.
 
-## v0.2.0
+## v0.2.0 - 2026-01-16
 
 Changes since the previous version:
 
