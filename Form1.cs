@@ -2047,8 +2047,7 @@ namespace RadEdit
                 return;
             }
 
-            languageToolCts?.Cancel();
-            languageToolCts?.Dispose();
+            CancelLanguageToolCts();
             languageToolCts = new CancellationTokenSource();
 
             if (string.IsNullOrEmpty(text))
@@ -2196,7 +2195,7 @@ namespace RadEdit
             if (!enabled)
             {
                 languageToolTimer.Stop();
-                languageToolCts?.Cancel();
+                CancelLanguageToolCts();
                 ClearLanguageToolIssues(true);
                 UpdateLanguageToolStatus("LT: disabled");
             }
@@ -2207,6 +2206,35 @@ namespace RadEdit
             }
 
             UpdateLanguageToolBarState();
+        }
+
+        private void CancelLanguageToolCts()
+        {
+            var cts = Interlocked.Exchange(ref languageToolCts, null);
+            if (cts == null)
+            {
+                return;
+            }
+
+            try
+            {
+                cts.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Already disposed elsewhere.
+            }
+            finally
+            {
+                try
+                {
+                    cts.Dispose();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // Best-effort cleanup.
+                }
+            }
         }
 
         private void HandleHotkey(IntPtr id)
@@ -3987,8 +4015,7 @@ namespace RadEdit
             }
             detachedHtmlHost?.Close();
             detachedRtfHost?.Close();
-            languageToolCts?.Cancel();
-            languageToolCts?.Dispose();
+            CancelLanguageToolCts();
             languageToolTimer.Stop();
             languageToolTimer.Dispose();
             languageToolClient.Dispose();
