@@ -9,6 +9,12 @@ Changes since the previous version:
 - RequestHtmlFile now returns ErrorResponse when no HTML view is active (no more RTF fallback).
 - Constrained the LanguageTool hover menu to stay within the current screen bounds.
 - Added an AutoHotkey script to test RequestHtmlFile responses.
+- Added SetDataContext syncing into HTML fields and RTF regions, plus a demo script.
+- Disabled WebView2 cache for local HTML files while keeping default caching for remote URLs.
+- Added WebView2 popup handling so new windows keep local mappings and routing.
+- Kept RTF toolbar commands active in HTML mode and removed auto-disabling of HTML.
+- Updated RTF region markers to use @@BEGIN/@@END to avoid Dragon bracket parsing.
+- Added WebView2 popup test assets for local relative path validation.
 
 ## v0.2.0
 
