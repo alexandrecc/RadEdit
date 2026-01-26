@@ -347,6 +347,8 @@ namespace RadEdit
         private const string LanguageToolLanguage = "fr";
         private const int LanguageToolDebounceMs = 700;
         private const int LanguageToolTimeoutSeconds = 25;
+        private const int LanguageToolStartupProbeTimeoutSeconds = 3;
+        private const string LanguageToolStartupProbeText = "Bonjour.";
         private static readonly string[] LanguageToolEnabledCategories =
         {
             "CAT_REGLES_DE_BASE",
@@ -392,6 +394,7 @@ namespace RadEdit
         private bool languageToolEnabled = true;
         private string languageToolStatusText = "LT: ready";
         private bool languageToolBusy;
+        private bool languageToolOffline;
         private readonly ContextMenuStrip languageToolHoverMenu = new();
         private LanguageToolIssue? languageToolHoverIssue;
         private bool hotkeyApplyRegistered;
@@ -468,6 +471,12 @@ namespace RadEdit
         {
             UnregisterGlobalHotkeys();
             base.OnHandleDestroyed(e);
+        }
+
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            _ = ProbeLanguageToolStatusAsync();
         }
 
         private bool HandleCopyDataCommand(CopyDataCommand command, string payload, IntPtr senderHandle)
@@ -1618,6 +1627,10 @@ namespace RadEdit
 
             UpdateLanguageToolHighlightRanges(text);
             UpdateLanguageToolUnderlineRanges();
+            if (languageToolOffline && !force)
+            {
+                return;
+            }
             if (!force && string.Equals(text, lastLanguageToolText, StringComparison.Ordinal))
             {
                 return;
@@ -1627,6 +1640,45 @@ namespace RadEdit
             languageToolTimer.Stop();
             languageToolTimer.Start();
             UpdateLanguageToolStatus("LT: checking...");
+        }
+
+        private async Task ProbeLanguageToolStatusAsync()
+        {
+            if (!languageToolEnabled)
+            {
+                return;
+            }
+
+            UpdateLanguageToolStatus("LT: checking...");
+
+            try
+            {
+                using var probeCts = new CancellationTokenSource(TimeSpan.FromSeconds(LanguageToolStartupProbeTimeoutSeconds));
+                await languageToolClient.CheckAsync(LanguageToolStartupProbeText, LanguageToolLanguage, probeCts.Token);
+                if (!languageToolEnabled)
+                {
+                    return;
+                }
+
+                languageToolOffline = false;
+                UpdateLanguageToolStatus("LT: ready");
+            }
+            catch (TaskCanceledException)
+            {
+                languageToolOffline = true;
+                UpdateLanguageToolStatus("LT: offline");
+                ClearLanguageToolIssues(true);
+            }
+            catch (OperationCanceledException)
+            {
+                // Ignore explicit cancellation (shutdown/disable).
+            }
+            catch (HttpRequestException)
+            {
+                languageToolOffline = true;
+                UpdateLanguageToolStatus("LT: offline");
+                ClearLanguageToolIssues(true);
+            }
         }
 
         private static string GetLanguageToolIgnorePath()
@@ -1719,6 +1771,7 @@ namespace RadEdit
             try
             {
                 var issues = await languageToolClient.CheckAsync(snapshot, LanguageToolLanguage, languageToolCts.Token);
+                languageToolOffline = false;
                 if (!string.Equals(snapshot, richTextBox1.Text, StringComparison.Ordinal))
                 {
                     pendingLanguageToolText = richTextBox1.Text;
@@ -1740,6 +1793,7 @@ namespace RadEdit
             }
             catch (HttpRequestException)
             {
+                languageToolOffline = true;
                 UpdateLanguageToolStatus("LT: offline");
                 ClearLanguageToolIssues(true);
             }
