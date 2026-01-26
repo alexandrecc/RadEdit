@@ -80,9 +80,9 @@ RadEdit listens for `WM_COPYDATA` messages whose `dwData` matches one of the fol
 | `FixFont` | 15 | Optional font name, size, or `name;size` | Applies a font face/size to the entire document. Empty payload defaults to Arial 10. |
 | `CleanUpEnd` | 16 | *(ignored)* | Trims trailing whitespace at the end of the document. |
 | `SetHtmlFile` | 17 | File path | Loads the HTML file in WebView2 and switches the UI into HTML mode. |
-| `RequestHtmlFile` | 18 | Optional path or filename | Exports the current DOM (including filled form values) to an HTML file and returns the absolute path via `HtmlFileResponse`. Uses the same `%TEMP%`/absolute path rules as `RequestTempFile`. If HTML mode is not active, RadEdit falls back to `RequestTempFile` behavior and emits `TempFileResponse`. |
+| `RequestHtmlFile` | 18 | Optional path or filename | Exports the current DOM (including filled form values) to an HTML file and returns the absolute path via `HtmlFileResponse`. Uses the same `%TEMP%`/absolute path rules as `RequestTempFile`. If HTML mode is not active, RadEdit emits `ErrorResponse`. |
 | `HtmlFileResponse` | 19 | File path | Response emitted by RadEdit for `RequestHtmlFile`. |
-| `SetDataContext` | 20 | JSON object | Merges the supplied JSON object into the current data context. Empty payload clears the context. To replace entirely, send `{"__mode":"replace","data":{...}}`. |
+| `SetDataContext` | 20 | JSON object | Merges the supplied JSON object into the current data context (each key updates or adds without clearing missing keys). Empty payload clears the context. To replace entirely, send `{"__mode":"replace","data":{...}}`. |
 | `GetDataContext` | 21 | Optional key path | Returns the full data context JSON when empty, or a single value when given a dotted path like `patient.id`. Missing keys return `null`. |
 | `DataContextResponse` | 22 | JSON | Response emitted by RadEdit for `GetDataContext`. |
 
@@ -159,9 +159,9 @@ Run `examples\data-context-demo.ahk` to send a `SetDataContext` JSON payload and
 When HTML mode is active, form fields can push text into hidden regions in the RTF. Define the region in the RTF with hidden markers:
 
 ```
-{\v [[BEGIN:PE_RULE]]}
+{\v @@BEGIN:PE_RULE@@}
 (auto)
-{\v [[END:PE_RULE]]}
+{\v @@END:PE_RULE@@}
 ```
 
 Then add `data-target-region` in the HTML. When the field changes, RadEdit replaces the text between the markers with the mapped text or the raw value.

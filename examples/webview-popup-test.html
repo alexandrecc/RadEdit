@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebView Popup Test</title>
+    <link rel="stylesheet" href="webview-popup-style.css">
+    <script src="webview-popup-script.js" defer></script>
+</head>
+<body>
+    <main class="card">
+        <h1>WebView Popup Test</h1>
+        <p>This page opens a new window using a relative URL.</p>
+        <div class="row">
+            <button id="openPopup" class="primary">Open Popup</button>
+            <a class="link" href="webview-popup-child.html" target="_blank">Open via link</a>
+        </div>
+        <div class="panel">
+            <p class="label">Main status</p>
+            <div id="statusMain" class="status">Waiting for script...</div>
+        </div>
+        <div class="panel">
+            <p class="label">Expected behavior</p>
+            <ul>
+                <li>The popup loads with the same styles.</li>
+                <li>The popup script sets its status text.</li>
+                <li>Relative links stay in the same folder.</li>
+            </ul>
+        </div>
+    </main>
+</body>
+</html>

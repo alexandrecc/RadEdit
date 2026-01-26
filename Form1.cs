@@ -46,6 +46,7 @@ namespace RadEdit
 
         private const int WM_COPYDATA = 0x004A;
         private const string HtmlRegionMessageType = "regionUpdate";
+        private const string DataContextMessageType = "dataContextUpdate";
         private const string DataContextModeKey = "__mode";
         private const string DataContextReplaceMode = "replace";
         private const string DataContextDataKey = "data";
@@ -126,6 +127,112 @@ namespace RadEdit
         return value || '';
     };
 
+    const normalizeValue = (value) => {
+        if (value === null || value === undefined) return '';
+        if (typeof value === 'string') return value;
+        if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+        try {
+            return JSON.stringify(value);
+        } catch (err) {
+            return String(value);
+        }
+    };
+
+    const coerceCheckbox = (value, controlValue) => {
+        if (typeof value === 'boolean') return value;
+        if (typeof value === 'number') return value !== 0;
+        if (typeof value === 'string') {
+            const trimmed = value.trim().toLowerCase();
+            if (['true', '1', 'yes', 'on', 'checked'].includes(trimmed)) return true;
+            if (['false', '0', 'no', 'off', '', 'null', 'undefined'].includes(trimmed)) return false;
+            return trimmed === (controlValue || '').trim().toLowerCase();
+        }
+        return false;
+    };
+
+    const dispatchInput = (control) => {
+        control.dispatchEvent(new Event('input', { bubbles: true }));
+        control.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+
+    const applyControlValue = (control, rawValue) => {
+        const tag = (control.tagName || '').toLowerCase();
+        const normalized = normalizeValue(rawValue);
+        if (tag === 'select') {
+            control.value = normalized;
+            if (control.value !== normalized) {
+                const match = Array.from(control.options).find((opt) => opt.text === normalized);
+                if (match) {
+                    match.selected = true;
+                }
+            }
+            dispatchInput(control);
+            return;
+        }
+        if (tag === 'textarea') {
+            control.value = normalized;
+            dispatchInput(control);
+            return;
+        }
+        if (tag === 'input') {
+            const type = (control.getAttribute('type') || 'text').toLowerCase();
+            if (type === 'checkbox') {
+                control.checked = coerceCheckbox(rawValue, control.value || '');
+                dispatchInput(control);
+                return;
+            }
+            if (type === 'radio') {
+                control.checked = normalized === (control.value || '');
+                if (control.checked) {
+                    dispatchInput(control);
+                }
+                return;
+            }
+            control.value = normalized;
+            dispatchInput(control);
+        }
+    };
+
+    const applyDataContext = (data) => {
+        if (!data || typeof data !== 'object') return;
+        const escapeValue = (value) => {
+            if (window.CSS && typeof window.CSS.escape === 'function') {
+                return window.CSS.escape(value);
+            }
+            return value.replace(/['\\]/g, '\\$&');
+        };
+        Object.keys(data).forEach((key) => {
+            if (!key) return;
+            const escaped = escapeValue(key);
+            const selector = `[data-field='${escaped}'], [data-target-region='${escaped}']`;
+            document.querySelectorAll(selector).forEach((node) => {
+                const control = node.matches('input, select, textarea')
+                    ? node
+                    : node.querySelector('input, select, textarea');
+                if (!control) return;
+                applyControlValue(control, data[key]);
+
+                const regionEl = node.matches('[data-target-region]')
+                    ? node
+                    : node.closest('[data-target-region]');
+                if (!regionEl) return;
+                const region = regionEl.getAttribute('data-target-region');
+                if (!region) return;
+                const field = regionEl.getAttribute('data-field') || control.getAttribute('data-field') || '';
+                const map = parseMap(regionEl) || parseMap(control);
+                const value = getValue(control);
+                const text = resolveText(control, value, map);
+                send({
+                    type: 'regionUpdate',
+                    region: region,
+                    field: field,
+                    value: value,
+                    text: text
+                });
+            });
+        });
+    };
+
     const handleEvent = (ev) => {
         const target = ev.target;
         if (!target || !target.closest) return;
@@ -154,6 +261,14 @@ namespace RadEdit
             text: text
         });
     };
+
+    if (window.chrome && window.chrome.webview && window.chrome.webview.addEventListener) {
+        window.chrome.webview.addEventListener('message', (event) => {
+            const payload = event.data;
+            if (!payload || payload.type !== 'dataContextUpdate') return;
+            applyDataContext(payload.data);
+        });
+    }
 
     document.addEventListener('change', handleEvent, true);
     document.addEventListener('input', handleEvent, true);
@@ -366,6 +481,8 @@ namespace RadEdit
         private const int HtmlMetaSampleLimit = 65536;
         private Task? webView2Initialization;
         private string? htmlRootFolder;
+        private readonly Dictionary<CoreWebView2, string> webView2LocalRoots = new();
+        private readonly List<Form> webViewPopupHosts = new();
         private bool isHtmlMode;
         private HtmlViewMode htmlViewMode = HtmlViewMode.Split;
         private double htmlSplitPercent = DefaultHtmlSplitPercent;
@@ -530,7 +647,6 @@ namespace RadEdit
 
         private bool TrySetRtf(string? rtf)
         {
-            SetHtmlMode(false);
             RunProgrammaticRtfUpdate(() =>
             {
                 if (string.IsNullOrEmpty(rtf))
@@ -546,7 +662,6 @@ namespace RadEdit
 
         private bool TryInsertRtf(string? rtf)
         {
-            SetHtmlMode(false);
             if (string.IsNullOrEmpty(rtf))
             {
                 return false;
@@ -558,7 +673,6 @@ namespace RadEdit
 
         private bool TryApplyRtfFile(string? path, bool replaceContent)
         {
-            SetHtmlMode(false);
             if (string.IsNullOrWhiteSpace(path))
             {
                 return false;
@@ -591,7 +705,6 @@ namespace RadEdit
                 return false;
             }
 
-            SetHtmlMode(false);
             string tempFilePath = CreateTempRtfFile(requestedPath);
             return NativeMethods.SendCopyData(recipient, CopyDataCommand.TempFileResponse, tempFilePath);
         }
@@ -672,8 +785,7 @@ namespace RadEdit
                 {
                     if (!isHtmlMode)
                     {
-                        string tempRtfPath = CreateTempRtfFile(requestedPath);
-                        NativeMethods.SendCopyData(recipient, CopyDataCommand.TempFileResponse, tempRtfPath);
+                        NativeMethods.SendCopyData(recipient, CopyDataCommand.ErrorResponse, "No active HTML file.");
                         return;
                     }
 
@@ -759,6 +871,7 @@ namespace RadEdit
                 if (!string.IsNullOrEmpty(htmlRootFolder))
                 {
                     webView2.CoreWebView2.ClearVirtualHostNameToFolderMapping(HtmlHostName);
+                    webView2LocalRoots.Remove(webView2.CoreWebView2);
                 }
 
                 webView2.CoreWebView2.SetVirtualHostNameToFolderMapping(
@@ -766,6 +879,7 @@ namespace RadEdit
                     folder,
                     CoreWebView2HostResourceAccessKind.Allow);
                 htmlRootFolder = folder;
+                webView2LocalRoots[webView2.CoreWebView2] = folder;
             }
         }
 
@@ -794,6 +908,9 @@ namespace RadEdit
                 webView2.CoreWebView2.WebMessageReceived += WebView2_WebMessageReceived;
                 webView2.CoreWebView2.HistoryChanged += WebView2_HistoryChanged;
                 webView2.CoreWebView2.NavigationCompleted += WebView2_NavigationCompleted;
+                webView2.CoreWebView2.NewWindowRequested += WebView2_NewWindowRequested;
+                webView2.CoreWebView2.AddWebResourceRequestedFilter($"https://{HtmlHostName}/*", CoreWebView2WebResourceContext.All);
+                webView2.CoreWebView2.WebResourceRequested += WebView2_WebResourceRequested;
                 await webView2.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(HtmlRoutingScript);
                 LogDebug("WebView2 initialized. Routing script injected.");
             }
@@ -890,6 +1007,130 @@ namespace RadEdit
             TryUpdateRtfRegion(region, text);
         }
 
+        private async void WebView2_NewWindowRequested(object? sender, CoreWebView2NewWindowRequestedEventArgs e)
+        {
+            if (webView2.CoreWebView2 == null)
+            {
+                return;
+            }
+
+            CoreWebView2Deferral? deferral = null;
+            Form? host = null;
+            string? rootFolder = null;
+            if (sender is CoreWebView2 senderCore)
+            {
+                webView2LocalRoots.TryGetValue(senderCore, out rootFolder);
+            }
+            rootFolder ??= htmlRootFolder;
+            try
+            {
+                deferral = e.GetDeferral();
+                host = CreateWebViewPopupHost(out var popupWebView);
+                await popupWebView.EnsureCoreWebView2Async(webView2.CoreWebView2.Environment);
+                if (popupWebView.CoreWebView2 == null)
+                {
+                    host.Close();
+                    return;
+                }
+
+                popupWebView.CoreWebView2.Settings.IsWebMessageEnabled = true;
+                popupWebView.CoreWebView2.WebMessageReceived += WebView2_WebMessageReceived;
+                popupWebView.CoreWebView2.NewWindowRequested += WebView2_NewWindowRequested;
+                popupWebView.CoreWebView2.AddWebResourceRequestedFilter($"https://{HtmlHostName}/*", CoreWebView2WebResourceContext.All);
+                popupWebView.CoreWebView2.WebResourceRequested += WebView2_WebResourceRequested;
+                await popupWebView.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(HtmlRoutingScript);
+
+                if (!string.IsNullOrEmpty(rootFolder))
+                {
+                    popupWebView.CoreWebView2.SetVirtualHostNameToFolderMapping(
+                        HtmlHostName,
+                        rootFolder,
+                        CoreWebView2HostResourceAccessKind.Allow);
+                    webView2LocalRoots[popupWebView.CoreWebView2] = rootFolder;
+                }
+
+                e.NewWindow = popupWebView.CoreWebView2;
+                e.Handled = true;
+
+                host.Show(this);
+                host.BringToFront();
+
+                if (!string.IsNullOrWhiteSpace(e.Uri))
+                {
+                    popupWebView.CoreWebView2.Navigate(e.Uri);
+                }
+            }
+            catch (Exception ex)
+            {
+                LogDebug("New window request failed: " + ex.Message);
+                host?.Close();
+            }
+            finally
+            {
+                deferral?.Complete();
+            }
+        }
+
+        private void WebView2_WebResourceRequested(object? sender, CoreWebView2WebResourceRequestedEventArgs e)
+        {
+            if (!TryHandleLocalWebResourceRequest(sender as CoreWebView2, e))
+            {
+                return;
+            }
+        }
+
+        private bool TryHandleLocalWebResourceRequest(CoreWebView2? core, CoreWebView2WebResourceRequestedEventArgs e)
+        {
+            if (core == null)
+            {
+                return false;
+            }
+
+            if (!webView2LocalRoots.TryGetValue(core, out string? rootFolder) ||
+                string.IsNullOrEmpty(rootFolder))
+            {
+                return false;
+            }
+
+            if (!Uri.TryCreate(e.Request.Uri, UriKind.Absolute, out Uri? uri))
+            {
+                return false;
+            }
+
+            if (!string.Equals(uri.Host, HtmlHostName, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            string relative = Uri.UnescapeDataString(uri.AbsolutePath.TrimStart('/'));
+            if (string.IsNullOrWhiteSpace(relative))
+            {
+                return false;
+            }
+
+            string root = Path.GetFullPath(rootFolder);
+            string fullPath = Path.GetFullPath(Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar)));
+            if (!fullPath.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(fullPath, root, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if (!File.Exists(fullPath))
+            {
+                return false;
+            }
+
+            string contentType = GetContentType(fullPath);
+            var stream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            string headers = $"Content-Type: {contentType}\r\n" +
+                             "Cache-Control: no-store, no-cache, must-revalidate\r\n" +
+                             "Pragma: no-cache\r\n" +
+                             "Expires: 0";
+            e.Response = core.Environment.CreateWebResourceResponse(stream, 200, "OK", headers);
+            return true;
+        }
+
         private void WebView2_HistoryChanged(object? sender, object e)
         {
             UpdateHtmlNavButtons();
@@ -900,16 +1141,66 @@ namespace RadEdit
             UpdateHtmlNavButtons();
         }
 
+        private static string GetContentType(string path)
+        {
+            string extension = Path.GetExtension(path);
+            if (string.IsNullOrWhiteSpace(extension))
+            {
+                return "application/octet-stream";
+            }
+
+            switch (extension.ToLowerInvariant())
+            {
+                case ".html":
+                case ".htm":
+                    return "text/html; charset=utf-8";
+                case ".css":
+                    return "text/css; charset=utf-8";
+                case ".js":
+                case ".mjs":
+                    return "application/javascript; charset=utf-8";
+                case ".json":
+                    return "application/json; charset=utf-8";
+                case ".txt":
+                    return "text/plain; charset=utf-8";
+                case ".xml":
+                    return "application/xml; charset=utf-8";
+                case ".svg":
+                    return "image/svg+xml";
+                case ".png":
+                    return "image/png";
+                case ".jpg":
+                case ".jpeg":
+                    return "image/jpeg";
+                case ".gif":
+                    return "image/gif";
+                case ".ico":
+                    return "image/x-icon";
+                case ".woff":
+                    return "font/woff";
+                case ".woff2":
+                    return "font/woff2";
+                case ".ttf":
+                    return "font/ttf";
+                case ".otf":
+                    return "font/otf";
+                case ".eot":
+                    return "application/vnd.ms-fontobject";
+                case ".pdf":
+                    return "application/pdf";
+                case ".map":
+                    return "application/json; charset=utf-8";
+                default:
+                    return "application/octet-stream";
+            }
+        }
+
         private void SetHtmlMode(bool enable)
         {
             if (isHtmlMode != enable)
             {
                 isHtmlMode = enable;
                 lastPlainText = richTextBox1.Text;
-
-                toolStripBoldButton.Enabled = !enable;
-                toolStripItalicButton.Enabled = !enable;
-                toolStripUnderlineButton.Enabled = !enable;
             }
 
             webView2.Visible = enable;
@@ -1338,6 +1629,9 @@ namespace RadEdit
                         previous.CoreWebView2.HistoryChanged -= WebView2_HistoryChanged;
                         previous.CoreWebView2.NavigationCompleted -= WebView2_NavigationCompleted;
                         previous.CoreWebView2.WebMessageReceived -= WebView2_WebMessageReceived;
+                        previous.CoreWebView2.NewWindowRequested -= WebView2_NewWindowRequested;
+                        previous.CoreWebView2.WebResourceRequested -= WebView2_WebResourceRequested;
+                        webView2LocalRoots.Remove(previous.CoreWebView2);
                     }
                 }
                 catch
@@ -1460,6 +1754,7 @@ namespace RadEdit
                 webView2.CoreWebView2 != null)
             {
                 webView2.CoreWebView2.ClearVirtualHostNameToFolderMapping(HtmlHostName);
+                webView2LocalRoots.Remove(webView2.CoreWebView2);
                 htmlRootFolder = null;
             }
 
@@ -2358,7 +2653,13 @@ namespace RadEdit
 
             Point anchor = richTextBox1.GetPositionFromCharIndex(issue.Offset + issue.Length);
             anchor.Y += (int)Math.Ceiling(richTextBox1.Font.GetHeight()) + 6;
-            languageToolHoverMenu.Show(richTextBox1, anchor);
+            languageToolHoverMenu.PerformLayout();
+            Size menuSize = languageToolHoverMenu.GetPreferredSize(Size.Empty);
+            Point screenAnchor = richTextBox1.PointToScreen(anchor);
+            Rectangle workingArea = Screen.FromPoint(screenAnchor).WorkingArea;
+            Rectangle desired = new Rectangle(screenAnchor, menuSize);
+            Rectangle bounded = ConstrainBounds(desired, workingArea);
+            languageToolHoverMenu.Show(bounded.Location);
         }
 
         private void HideLanguageToolHoverMenu()
@@ -2688,8 +2989,12 @@ namespace RadEdit
                 throw new ArgumentException("SetDataContext payload must be a JSON object.");
             }
 
-            if (TryReplaceDataContext(obj))
+            if (TryReplaceDataContext(obj, out JsonObject? replaceData))
             {
+                if (replaceData != null)
+                {
+                    ApplyDataContextUpdates(replaceData);
+                }
                 return true;
             }
 
@@ -2701,11 +3006,13 @@ namespace RadEdit
                 }
             }
 
+            ApplyDataContextUpdates(obj);
             return true;
         }
 
-        private bool TryReplaceDataContext(JsonObject obj)
+        private bool TryReplaceDataContext(JsonObject obj, out JsonObject? replaceData)
         {
+            replaceData = null;
             if (!obj.TryGetPropertyValue(DataContextModeKey, out JsonNode? modeNode))
             {
                 return false;
@@ -2731,6 +3038,7 @@ namespace RadEdit
                 dataContext = (JsonObject)dataObj.DeepClone();
             }
 
+            replaceData = dataObj;
             return true;
         }
 
@@ -2772,9 +3080,111 @@ namespace RadEdit
             return NativeMethods.SendCopyData(recipient, CopyDataCommand.DataContextResponse, response);
         }
 
+        private void ApplyDataContextUpdates(JsonObject updates)
+        {
+            if (updates.Count == 0)
+            {
+                return;
+            }
+
+            var htmlUpdates = new JsonObject();
+            var rtfUpdates = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var kvp in updates)
+            {
+                if (string.IsNullOrWhiteSpace(kvp.Key))
+                {
+                    continue;
+                }
+
+                if (string.Equals(kvp.Key, DataContextModeKey, StringComparison.Ordinal) ||
+                    string.Equals(kvp.Key, DataContextDataKey, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                rtfUpdates[kvp.Key] = NormalizeDataContextValue(kvp.Value);
+                htmlUpdates[kvp.Key] = kvp.Value?.DeepClone();
+            }
+
+            foreach (var kvp in rtfUpdates)
+            {
+                TryUpdateRtfRegion(kvp.Key, kvp.Value);
+            }
+
+            if (!isHtmlMode || htmlUpdates.Count == 0)
+            {
+                return;
+            }
+
+            BeginInvoke(new Action(async () =>
+            {
+                try
+                {
+                    await EnsureWebView2InitializedAsync();
+                    if (webView2.CoreWebView2 == null)
+                    {
+                        return;
+                    }
+
+                    var payload = new JsonObject
+                    {
+                        ["type"] = DataContextMessageType,
+                        ["data"] = htmlUpdates
+                    };
+                    webView2.CoreWebView2.PostWebMessageAsJson(payload.ToJsonString());
+                }
+                catch
+                {
+                    // Ignore failures if the WebView isn't ready.
+                }
+            }));
+        }
+
+        private static string NormalizeDataContextValue(JsonNode? value)
+        {
+            if (value == null)
+            {
+                return string.Empty;
+            }
+
+            if (value is JsonValue jsonValue)
+            {
+                if (jsonValue.TryGetValue(out string? s))
+                {
+                    return s ?? string.Empty;
+                }
+
+                if (jsonValue.TryGetValue(out bool b))
+                {
+                    return b ? "true" : "false";
+                }
+
+                if (jsonValue.TryGetValue(out int i))
+                {
+                    return i.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                }
+
+                if (jsonValue.TryGetValue(out long l))
+                {
+                    return l.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                }
+
+                if (jsonValue.TryGetValue(out double d))
+                {
+                    return d.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                }
+
+                if (jsonValue.TryGetValue(out decimal m))
+                {
+                    return m.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                }
+            }
+
+            return value.ToJsonString();
+        }
+
         private bool TryGotoEnd()
         {
-            SetHtmlMode(false);
             string text = richTextBox1.Text;
             int endPos = text.TrimEnd('\r', '\n', ' ', '\t').Length;
             richTextBox1.SelectionStart = endPos;
@@ -2806,8 +3216,6 @@ namespace RadEdit
 
         private bool TryFixFontCommand(string? payload)
         {
-            SetHtmlMode(false);
-
             string face = "Arial";
             float size = 10f;
 
@@ -2881,7 +3289,6 @@ namespace RadEdit
 
         private bool TryCleanUpEnd()
         {
-            SetHtmlMode(false);
             string txt = richTextBox1.Text;
             if (string.IsNullOrEmpty(txt))
             {
@@ -2942,8 +3349,8 @@ namespace RadEdit
 
             string rtf = richTextBox1.Rtf ?? string.Empty;
             string trimmedRegion = regionName.Trim();
-            string beginMarker = "[[BEGIN:" + trimmedRegion + "]]";
-            string endMarker = "[[END:" + trimmedRegion + "]]";
+            string beginMarker = "@@BEGIN:" + trimmedRegion + "@@";
+            string endMarker = "@@END:" + trimmedRegion + "@@";
             string replacementRtf = EscapeRtfText(replacementText ?? string.Empty);
 
             int searchIndex = 0;
@@ -3005,8 +3412,8 @@ namespace RadEdit
         private bool TryUpdateRegionByInlineRtf(string regionName, string? replacementText)
         {
             string trimmedRegion = regionName.Trim();
-            string beginMarker = "[[BEGIN:" + trimmedRegion + "]]";
-            string endMarker = "[[END:" + trimmedRegion + "]]";
+            string beginMarker = "@@BEGIN:" + trimmedRegion + "@@";
+            string endMarker = "@@END:" + trimmedRegion + "@@";
             string rtf = richTextBox1.Rtf ?? string.Empty;
 
             int beginIndex = rtf.IndexOf(beginMarker, StringComparison.Ordinal);
@@ -3085,8 +3492,8 @@ namespace RadEdit
                 return false;
             }
 
-            string beginMarker = "[[BEGIN:" + trimmedRegion + "]]";
-            string endMarker = "[[END:" + trimmedRegion + "]]";
+            string beginMarker = "@@BEGIN:" + trimmedRegion + "@@";
+            string endMarker = "@@END:" + trimmedRegion + "@@";
             string text = richTextBox1.Text ?? string.Empty;
 
             int beginIndex = text.IndexOf(beginMarker, StringComparison.Ordinal);
@@ -3470,6 +3877,54 @@ namespace RadEdit
             toolStripPopRtfButton.Text = "Pop RTF";
         }
 
+        private Form CreateWebViewPopupHost(out Microsoft.Web.WebView2.WinForms.WebView2 popupWebView)
+        {
+            var host = new Form
+            {
+                Text = "HTML View",
+                StartPosition = FormStartPosition.CenterParent,
+                Size = new Size(900, 700),
+                ShowInTaskbar = true,
+                Owner = this
+            };
+
+            popupWebView = new Microsoft.Web.WebView2.WinForms.WebView2
+            {
+                AllowExternalDrop = true,
+                CreationProperties = null,
+                DefaultBackgroundColor = Color.White,
+                Dock = DockStyle.Fill,
+                Location = new Point(0, 0),
+                Name = "webView2Popup",
+                TabIndex = 1,
+                ZoomFactor = 1D
+            };
+
+            host.Controls.Add(popupWebView);
+            host.Tag = popupWebView;
+            host.FormClosed += PopupWebViewHost_FormClosed;
+            webViewPopupHosts.Add(host);
+            return host;
+        }
+
+        private void PopupWebViewHost_FormClosed(object? sender, FormClosedEventArgs e)
+        {
+            if (sender is not Form host)
+            {
+                return;
+            }
+
+            webViewPopupHosts.Remove(host);
+            if (host.Tag is Microsoft.Web.WebView2.WinForms.WebView2 popupWebView &&
+                popupWebView.CoreWebView2 != null)
+            {
+                popupWebView.CoreWebView2.WebMessageReceived -= WebView2_WebMessageReceived;
+                popupWebView.CoreWebView2.NewWindowRequested -= WebView2_NewWindowRequested;
+                popupWebView.CoreWebView2.WebResourceRequested -= WebView2_WebResourceRequested;
+                webView2LocalRoots.Remove(popupWebView.CoreWebView2);
+            }
+        }
+
         private Form CreateDetachedHost(string title, FormClosingEventHandler closingHandler)
         {
             var host = new Form
@@ -3526,6 +3981,10 @@ namespace RadEdit
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             isClosing = true;
+            foreach (var host in webViewPopupHosts.ToArray())
+            {
+                host.Close();
+            }
             detachedHtmlHost?.Close();
             detachedRtfHost?.Close();
             languageToolCts?.Cancel();
@@ -3575,7 +4034,7 @@ namespace RadEdit
                 return $"{parsed.Major}.{parsed.Minor}";
             }
 
-            return "0.2.0";
+            return "0.2.1";
         }
 
         private static class NativeMethods

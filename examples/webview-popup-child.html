@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Popup Child</title>
+    <link rel="stylesheet" href="webview-popup-style.css">
+    <script src="webview-popup-child-script.js" defer></script>
+</head>
+<body>
+    <main class="card">
+        <h1>Popup Window</h1>
+        <p>If you can read this with styling, relative paths are working.</p>
+        <div class="panel">
+            <p class="label">Popup status</p>
+            <div id="statusPopup" class="status">Waiting for script...</div>
+        </div>
+        <div class="panel">
+            <p class="label">Location</p>
+            <div id="locationPopup" class="status small">...</div>
+        </div>
+        <a class="link" href="webview-popup-test.html">Back to main</a>
+    </main>
+</body>
+</html>
