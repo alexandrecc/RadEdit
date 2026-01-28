@@ -69,7 +69,7 @@ RadEdit listens for `WM_COPYDATA` messages whose `dwData` matches one of the fol
 | `InsertRtfText` | 2 | RTF text | Inserts/overwrites at the current selection using `SelectedRtf`. |
 | `SetRtfFile` | 3 | File path | Loads an RTF file from disk into the editor (replaces content). Relative paths resolve against the RadEdit process working directory. |
 | `InsertRtfFile` | 4 | File path | Inserts the contents of the RTF file at the current selection. |
-| `RequestTempFile` | 5 | Optional path or filename | Saves the current document to an RTF file and returns the absolute path via a `TempFileResponse` (see below). If the payload is relative, the file is created under `%TEMP%`; otherwise an absolute path is respected. Without a payload, a file named after the window title is generated under `%TEMP%`. |
+| `RequestTempFile` | 5 | Optional path/filename or JSON | Saves the current document to an RTF file and returns the absolute path via a `TempFileResponse` (see below). If the payload is relative, the file is created under `%TEMP%`; otherwise an absolute path is respected. Without a payload, a file named after the window title is generated under `%TEMP%`. JSON payloads can include `path` and `stripHiddenMarkers` (bool) to remove `@@BEGIN/@@END` tokens before saving. |
 | `TempFileResponse` | 6 | File path | Response emitted by RadEdit for `RequestTempFile`. |
 | `ErrorResponse` | 7 | Error text | Response emitted if a command throws an exception (file not found, bad payload, etc.). |
 | `SetTitle` | 8 | Title text | Updates the title label on the tool strip. The window caption remains `RadEdit`. |

@@ -732,11 +732,12 @@ namespace RadEdit
                 return false;
             }
 
-            string tempFilePath = CreateTempRtfFile(requestedPath);
+            ParseTempFileRequest(requestedPath, out string? resolvedPath, out bool stripHiddenMarkers);
+            string tempFilePath = CreateTempRtfFile(resolvedPath, stripHiddenMarkers);
             return NativeMethods.SendCopyData(recipient, CopyDataCommand.TempFileResponse, tempFilePath);
         }
 
-        private string CreateTempRtfFile(string? requestedPath)
+        private string CreateTempRtfFile(string? requestedPath, bool stripHiddenMarkers)
         {
             string? resolvedPath = null;
             string trimmedRequest = requestedPath?.Trim() ?? string.Empty;
@@ -765,8 +766,92 @@ namespace RadEdit
                 Directory.CreateDirectory(directory);
             }
 
-            richTextBox1.SaveFile(resolvedPath, RichTextBoxStreamType.RichText);
+            if (stripHiddenMarkers)
+            {
+                string rtf = richTextBox1.Rtf ?? string.Empty;
+                string sanitized = StripHiddenMarkersFromRtf(rtf);
+                using var buffer = new RichTextBox();
+                buffer.Rtf = sanitized;
+                buffer.SaveFile(resolvedPath, RichTextBoxStreamType.RichText);
+            }
+            else
+            {
+                richTextBox1.SaveFile(resolvedPath, RichTextBoxStreamType.RichText);
+            }
             return resolvedPath;
+        }
+
+        private static void ParseTempFileRequest(string? payload, out string? path, out bool stripHiddenMarkers)
+        {
+            path = payload;
+            stripHiddenMarkers = false;
+
+            if (string.IsNullOrWhiteSpace(payload))
+            {
+                path = null;
+                return;
+            }
+
+            string trimmed = payload.Trim();
+            if (!trimmed.StartsWith("{", StringComparison.Ordinal) || !trimmed.EndsWith("}", StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            try
+            {
+                using var doc = JsonDocument.Parse(trimmed);
+                if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                {
+                    return;
+                }
+
+                string? parsedPath = null;
+                bool parsedStrip = false;
+
+                foreach (JsonProperty property in doc.RootElement.EnumerateObject())
+                {
+                    string name = property.Name;
+                    if (string.Equals(name, "path", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(name, "file", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(name, "filename", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (property.Value.ValueKind == JsonValueKind.String)
+                        {
+                            parsedPath = property.Value.GetString();
+                        }
+                    }
+                    else if (string.Equals(name, "stripHiddenMarkers", StringComparison.OrdinalIgnoreCase) ||
+                             string.Equals(name, "stripMarkers", StringComparison.OrdinalIgnoreCase))
+                    {
+                        parsedStrip = property.Value.ValueKind switch
+                        {
+                            JsonValueKind.True => true,
+                            JsonValueKind.False => false,
+                            JsonValueKind.String => bool.TryParse(property.Value.GetString(), out bool flag) && flag,
+                            _ => parsedStrip
+                        };
+                    }
+                }
+
+                path = parsedPath;
+                stripHiddenMarkers = parsedStrip;
+            }
+            catch
+            {
+                path = payload;
+                stripHiddenMarkers = false;
+            }
+        }
+
+        private static string StripHiddenMarkersFromRtf(string rtf)
+        {
+            if (string.IsNullOrEmpty(rtf))
+            {
+                return rtf;
+            }
+
+            return Regex.Replace(rtf, "@@(BEGIN|END):[^@\\r\\n]+@@", string.Empty, RegexOptions.CultureInvariant);
         }
 
         private bool TrySetHtmlFile(string? path, IntPtr senderHandle)
@@ -4118,7 +4203,7 @@ namespace RadEdit
                 return $"{parsed.Major}.{parsed.Minor}";
             }
 
-            return "0.2.1";
+            return "0.2.2";
         }
 
         private static class NativeMethods

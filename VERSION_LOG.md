@@ -1,5 +1,13 @@
 # Version Log
 
+## v0.2.2 - 2026-01-28
+
+Changes since the previous version:
+
+- Added optional RequestTempFile JSON payload support, including `stripHiddenMarkers`.
+- Added RTF export post-processing to remove @@BEGIN/@@END tokens when requested.
+- Added an AutoHotkey demo that exports raw vs sanitized temp files.
+
 ## v0.2.1 - 2026-01-25
 
 Changes since the previous version:
