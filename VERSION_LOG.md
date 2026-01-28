@@ -1,5 +1,12 @@
 # Version Log
 
+## v0.2.3 - 2026-01-28
+
+Changes since the previous version:
+
+- SetHtmlFile now clears the HTML view when the payload is empty.
+- Added an AutoHotkey demo that loads and clears the HTML view.
+
 ## v0.2.2 - 2026-01-28
 
 Changes since the previous version:

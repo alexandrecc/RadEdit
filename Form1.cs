@@ -858,8 +858,8 @@ namespace RadEdit
         {
             if (string.IsNullOrWhiteSpace(path))
             {
-                NativeMethods.SendCopyData(senderHandle, CopyDataCommand.ErrorResponse, "HTML file path is required.");
-                return false;
+                BeginInvoke(ClearHtmlView);
+                return true;
             }
 
             string fullPath = Path.GetFullPath(path);
@@ -4203,7 +4203,7 @@ namespace RadEdit
                 return $"{parsed.Major}.{parsed.Minor}";
             }
 
-            return "0.2.2";
+            return "0.2.3";
         }
 
         private static class NativeMethods

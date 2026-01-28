@@ -81,7 +81,7 @@ RadEdit listens for `WM_COPYDATA` messages whose `dwData` matches one of the fol
 | `GotoEnd` | 14 | *(ignored)* | Moves the caret to the end of the document (ignores trailing whitespace) and scrolls into view. |
 | `FixFont` | 15 | Optional font name, size, or `name;size` | Applies a font face/size to the entire document. Empty payload defaults to Arial 10. |
 | `CleanUpEnd` | 16 | *(ignored)* | Trims trailing whitespace at the end of the document. |
-| `SetHtmlFile` | 17 | File path | Loads the HTML file in WebView2 and shows the HTML view alongside the RTF editor. |
+| `SetHtmlFile` | 17 | File path | Loads the HTML file in WebView2 and shows the HTML view alongside the RTF editor. Empty payload clears the HTML view. |
 | `RequestHtmlFile` | 18 | Optional path or filename | Exports the current DOM (including filled form values) to an HTML file and returns the absolute path via `HtmlFileResponse`. Uses the same `%TEMP%`/absolute path rules as `RequestTempFile`. If HTML mode is not active, RadEdit emits `ErrorResponse`. |
 | `HtmlFileResponse` | 19 | File path | Response emitted by RadEdit for `RequestHtmlFile`. |
 | `SetDataContext` | 20 | JSON object | Merges the supplied JSON object into the current data context (each key updates or adds without clearing missing keys). Empty payload clears the context. To replace entirely, send `{"__mode":"replace","data":{...}}`. When HTML is loaded, matching `data-field` or `data-target-region` values are pushed into the HTML controls and the RTF regions. |

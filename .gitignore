@@ -364,3 +364,6 @@ FodyWeavers.xsd
 
 # Local LanguageTool install
 tools/languagetool/
+
+# Local tooling
+tools/
