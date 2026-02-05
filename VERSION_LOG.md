@@ -1,5 +1,16 @@
 # Version Log
 
+## v0.2.4 - 2026-02-05
+
+Changes since the previous version:
+
+- Added HTML metadata support for seeding the data context via `<meta name="radedit:context" ...>`.
+- Added WebView2 JavaScript helpers: `setDataContext`, `getDataContext`, `updateView`, and `sendRtf`.
+- Data context updates now sync into HTML after navigation and broadcast to popup WebViews.
+- Added a standalone HTML demo for the data context + view helpers.
+- Added an AutoHotkey launcher for the HTML data context demo.
+- Fixed dictation routing so HTML focus without an editable target no longer suppresses RTF input.
+
 ## v0.2.3 - 2026-01-28
 
 Changes since the previous version:

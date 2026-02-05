@@ -47,10 +47,20 @@ namespace RadEdit
         private const int WM_COPYDATA = 0x004A;
         private const string HtmlRegionMessageType = "regionUpdate";
         private const string HtmlRtfMessageType = "rtfUpdate";
+        private const string HtmlViewMessageType = "viewUpdate";
         private const string DataContextMessageType = "dataContextUpdate";
+        private const string DataContextRequestMessageType = "dataContextRequest";
+        private const string DataContextResponseMessageType = "dataContextResponse";
+        private const string DataContextSetMessageType = "dataContextSet";
         private const string DataContextModeKey = "__mode";
         private const string DataContextReplaceMode = "replace";
         private const string DataContextDataKey = "data";
+        private static readonly string[] HtmlDataContextMetaNames =
+        {
+            "radedit:context",
+            "radedit:datacontext",
+            "radedit:data"
+        };
         private static readonly JsonSerializerOptions HtmlMessageJsonOptions = new()
         {
             PropertyNameCaseInsensitive = true
@@ -63,8 +73,12 @@ namespace RadEdit
     }
     window.__radeditRoutingAttached = true;
 
+    const canPostMessage = () => {
+        return window.chrome && window.chrome.webview && typeof window.chrome.webview.postMessage === 'function';
+    };
+
     const send = (payload) => {
-        if (window.chrome && window.chrome.webview) {
+        if (canPostMessage()) {
             window.chrome.webview.postMessage(payload);
         }
     };
@@ -97,6 +111,52 @@ namespace RadEdit
     }
     if (!window.RadEdit.sendRtf) {
         window.RadEdit.sendRtf = sendRtfCommand;
+    }
+
+    const dataContextRequests = new Map();
+    let dataContextRequestSeq = 0;
+
+    const setDataContext = (data) => {
+        const payload = data === undefined ? null : data;
+        send({
+            type: 'dataContextSet',
+            data: payload
+        });
+    };
+
+    const getDataContext = (path) => {
+        return new Promise((resolve) => {
+            if (!canPostMessage()) {
+                resolve(null);
+                return;
+            }
+            const id = 'dc_' + Date.now() + '_' + (++dataContextRequestSeq);
+            dataContextRequests.set(id, resolve);
+            send({
+                type: 'dataContextRequest',
+                requestId: id,
+                path: path ? String(path) : ''
+            });
+        });
+    };
+
+    if (!window.RadEdit.setDataContext) {
+        window.RadEdit.setDataContext = setDataContext;
+    }
+    if (!window.RadEdit.getDataContext) {
+        window.RadEdit.getDataContext = getDataContext;
+    }
+
+    const updateView = (options) => {
+        if (options === undefined || options === null) return;
+        send({
+            type: 'viewUpdate',
+            options: options
+        });
+    };
+
+    if (!window.RadEdit.updateView) {
+        window.RadEdit.updateView = updateView;
     }
 
     const parseMap = (el) => {
@@ -320,8 +380,19 @@ namespace RadEdit
     if (window.chrome && window.chrome.webview && window.chrome.webview.addEventListener) {
         window.chrome.webview.addEventListener('message', (event) => {
             const payload = event.data;
-            if (!payload || payload.type !== 'dataContextUpdate') return;
-            queueDataContext(payload.data);
+            if (!payload || !payload.type) return;
+            if (payload.type === 'dataContextUpdate') {
+                queueDataContext(payload.data);
+                return;
+            }
+            if (payload.type === 'dataContextResponse') {
+                const requestId = payload.requestId;
+                if (!requestId) return;
+                const resolver = dataContextRequests.get(requestId);
+                if (!resolver) return;
+                dataContextRequests.delete(requestId);
+                resolver(payload.data);
+            }
         });
     }
 
@@ -559,6 +630,7 @@ namespace RadEdit
         private bool allowRtfUpdatesWhileHtmlFocus;
         private readonly object dataContextLock = new();
         private JsonObject dataContext = new();
+        private string? pendingHtmlDataContextPayload;
         private readonly LanguageToolClient languageToolClient;
         private readonly System.Windows.Forms.Timer languageToolTimer = new();
         private CancellationTokenSource? languageToolCts;
@@ -991,6 +1063,9 @@ namespace RadEdit
             HtmlViewOptions? viewOptions = TryReadHtmlViewOptions(fullPath, out HtmlViewOptions? parsed)
                 ? parsed
                 : null;
+            string? htmlDataContextPayload = TryReadHtmlDataContext(fullPath, out string? parsedContext)
+                ? parsedContext
+                : null;
 
             await EnsureWebView2InitializedAsync();
 
@@ -1008,6 +1083,9 @@ namespace RadEdit
             webView2.Source = new Uri(url);
             textBoxHtmlUrl.Text = fullPath;
             SetHtmlMode(true);
+            pendingHtmlDataContextPayload = string.IsNullOrWhiteSpace(htmlDataContextPayload)
+                ? null
+                : htmlDataContextPayload;
         }
 
         private void ConfigureHtmlMapping(string folder)
@@ -1209,6 +1287,42 @@ namespace RadEdit
                 }
 
                 HandleRtfUpdate(message);
+                return;
+            }
+
+            if (string.Equals(messageType, HtmlViewMessageType, StringComparison.OrdinalIgnoreCase))
+            {
+                if (InvokeRequired)
+                {
+                    BeginInvoke(new Action(() => HandleHtmlViewMessage(sender as CoreWebView2, e.WebMessageAsJson)));
+                    return;
+                }
+
+                HandleHtmlViewMessage(sender as CoreWebView2, e.WebMessageAsJson);
+                return;
+            }
+
+            if (string.Equals(messageType, DataContextSetMessageType, StringComparison.OrdinalIgnoreCase))
+            {
+                if (InvokeRequired)
+                {
+                    BeginInvoke(new Action(() => HandleDataContextSetMessage(sender as CoreWebView2, e.WebMessageAsJson)));
+                    return;
+                }
+
+                HandleDataContextSetMessage(sender as CoreWebView2, e.WebMessageAsJson);
+                return;
+            }
+
+            if (string.Equals(messageType, DataContextRequestMessageType, StringComparison.OrdinalIgnoreCase))
+            {
+                if (InvokeRequired)
+                {
+                    BeginInvoke(new Action(() => HandleDataContextRequestMessage(sender as CoreWebView2, e.WebMessageAsJson)));
+                    return;
+                }
+
+                HandleDataContextRequestMessage(sender as CoreWebView2, e.WebMessageAsJson);
                 return;
             }
 
@@ -1448,6 +1562,26 @@ namespace RadEdit
         private void WebView2_NavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
         {
             UpdateHtmlNavButtons();
+            if (!isHtmlMode)
+            {
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(pendingHtmlDataContextPayload))
+            {
+                string payload = pendingHtmlDataContextPayload;
+                pendingHtmlDataContextPayload = null;
+                try
+                {
+                    TrySetDataContext(payload, pushToHtml: false);
+                }
+                catch (Exception ex)
+                {
+                    LogDebug("HTML data context meta failed: " + ex.Message);
+                }
+            }
+
+            PushDataContextSnapshotToHtml();
         }
 
         private static string GetContentType(string path)
@@ -1675,6 +1809,115 @@ namespace RadEdit
             return TryParseHtmlViewOptions(content, out options);
         }
 
+        private static bool TryReadHtmlDataContext(string fullPath, out string? payload)
+        {
+            payload = null;
+
+            string sample = ReadFileSample(fullPath, HtmlMetaSampleLimit);
+            if (string.IsNullOrEmpty(sample))
+            {
+                return false;
+            }
+
+            foreach (string metaName in HtmlDataContextMetaNames)
+            {
+                string? content = ExtractMetaContent(sample, metaName);
+                if (string.IsNullOrWhiteSpace(content))
+                {
+                    continue;
+                }
+
+                string decoded = System.Net.WebUtility.HtmlDecode(content).Trim();
+                if (TryParseHtmlDataContext(decoded, out payload))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool TryParseHtmlDataContext(string content, out string? payload)
+        {
+            payload = null;
+            if (string.IsNullOrWhiteSpace(content))
+            {
+                return false;
+            }
+
+            string trimmed = content.Trim();
+            if (trimmed.StartsWith("{", StringComparison.Ordinal))
+            {
+                try
+                {
+                    if (JsonNode.Parse(trimmed) is JsonObject)
+                    {
+                        payload = trimmed;
+                        return true;
+                    }
+                }
+                catch
+                {
+                    // Fall through to key/value parsing.
+                }
+            }
+
+            var obj = new JsonObject();
+            string[] pairs = trimmed.Split(new[] { ';', ',' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (string rawPair in pairs)
+            {
+                string pair = rawPair.Trim();
+                if (pair.Length == 0)
+                {
+                    continue;
+                }
+
+                string[] parts = pair.Split(new[] { '=' }, 2, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length < 2)
+                {
+                    parts = pair.Split(new[] { ':' }, 2, StringSplitOptions.RemoveEmptyEntries);
+                }
+
+                if (parts.Length < 2)
+                {
+                    continue;
+                }
+
+                string key = parts[0].Trim();
+                string value = parts[1].Trim();
+                if (string.IsNullOrEmpty(key))
+                {
+                    continue;
+                }
+
+                value = UnquoteDataContextValue(value);
+                obj[key] = value;
+            }
+
+            if (obj.Count == 0)
+            {
+                return false;
+            }
+
+            payload = obj.ToJsonString();
+            return true;
+        }
+
+        private static string UnquoteDataContextValue(string value)
+        {
+            if (value.Length >= 2)
+            {
+                char first = value[0];
+                char last = value[value.Length - 1];
+                if ((first == '"' && last == '"') || (first == '\'' && last == '\''))
+                {
+                    return value.Substring(1, value.Length - 2);
+                }
+            }
+
+            return value;
+        }
+
         private static string ReadFileSample(string fullPath, int limit)
         {
             using var stream = File.OpenRead(fullPath);
@@ -1805,6 +2048,123 @@ namespace RadEdit
             return true;
         }
 
+        private static bool TryParseHtmlViewOptions(JsonElement element, out HtmlViewOptions? options)
+        {
+            options = null;
+            if (element.ValueKind != JsonValueKind.Object)
+            {
+                return false;
+            }
+
+            bool hasValue = false;
+            var parsed = new HtmlViewOptions();
+
+            foreach (JsonProperty property in element.EnumerateObject())
+            {
+                string key = property.Name.Trim().ToLowerInvariant();
+                JsonElement value = property.Value;
+
+                switch (key)
+                {
+                    case "mode":
+                        if (value.ValueKind == JsonValueKind.String &&
+                            TryParseMode(value.GetString() ?? string.Empty, out HtmlViewMode mode))
+                        {
+                            parsed.Mode = mode;
+                            hasValue = true;
+                        }
+                        break;
+                    case "size":
+                        if (TryParsePercentElement(value, out double percent))
+                        {
+                            parsed.SplitPercent = percent;
+                            hasValue = true;
+                        }
+                        break;
+                    case "monitor":
+                        if (TryParseIntElement(value, out int monitor) && monitor > 0)
+                        {
+                            parsed.MonitorIndex = monitor - 1;
+                            hasValue = true;
+                        }
+                        break;
+                    case "x":
+                        if (TryParseIntElement(value, out int x))
+                        {
+                            parsed.X = x;
+                            hasValue = true;
+                        }
+                        break;
+                    case "y":
+                        if (TryParseIntElement(value, out int y))
+                        {
+                            parsed.Y = y;
+                            hasValue = true;
+                        }
+                        break;
+                    case "width":
+                        if (TryParseIntElement(value, out int width))
+                        {
+                            parsed.Width = width;
+                            hasValue = true;
+                        }
+                        break;
+                    case "height":
+                        if (TryParseIntElement(value, out int height))
+                        {
+                            parsed.Height = height;
+                            hasValue = true;
+                        }
+                        break;
+                }
+            }
+
+            if (!hasValue)
+            {
+                return false;
+            }
+
+            options = parsed;
+            return true;
+        }
+
+        private static bool TryParseIntElement(JsonElement element, out int value)
+        {
+            value = 0;
+            switch (element.ValueKind)
+            {
+                case JsonValueKind.Number:
+                    return element.TryGetInt32(out value);
+                case JsonValueKind.String:
+                    return int.TryParse(element.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out value);
+                default:
+                    return false;
+            }
+        }
+
+        private static bool TryParsePercentElement(JsonElement element, out double percent)
+        {
+            percent = 0;
+            switch (element.ValueKind)
+            {
+                case JsonValueKind.Number:
+                    if (!element.TryGetDouble(out double raw))
+                    {
+                        return false;
+                    }
+                    if (raw > 1)
+                    {
+                        raw /= 100d;
+                    }
+                    percent = Math.Clamp(raw, 0, 1);
+                    return true;
+                case JsonValueKind.String:
+                    return TryParsePercent(element.GetString() ?? string.Empty, out percent);
+                default:
+                    return false;
+            }
+        }
+
         private static bool TryParseMode(string value, out HtmlViewMode mode)
         {
             switch (value.Trim().ToLowerInvariant())
@@ -1915,6 +2275,7 @@ namespace RadEdit
         private void ClearHtmlView()
         {
             textBoxHtmlUrl.Text = string.Empty;
+            pendingHtmlDataContextPayload = null;
 
             if (IsControlDetached(webView2, detachedHtmlHost))
             {
@@ -2057,6 +2418,7 @@ namespace RadEdit
         private async Task NavigateToUrlAsync(Uri uri)
         {
             await EnsureWebView2InitializedAsync();
+            pendingHtmlDataContextPayload = null;
 
             if (!string.Equals(uri.Host, HtmlHostName, StringComparison.OrdinalIgnoreCase) &&
                 !string.IsNullOrEmpty(htmlRootFolder) &&
@@ -3335,6 +3697,11 @@ namespace RadEdit
 
         private bool TrySetDataContext(string? payload)
         {
+            return TrySetDataContext(payload, pushToHtml: true);
+        }
+
+        private bool TrySetDataContext(string? payload, bool pushToHtml)
+        {
             if (string.IsNullOrWhiteSpace(payload))
             {
                 lock (dataContextLock)
@@ -3355,7 +3722,7 @@ namespace RadEdit
             {
                 if (replaceData != null)
                 {
-                    ApplyDataContextUpdates(replaceData);
+                    ApplyDataContextUpdates(replaceData, pushToHtml);
                 }
                 return true;
             }
@@ -3368,7 +3735,7 @@ namespace RadEdit
                 }
             }
 
-            ApplyDataContextUpdates(obj);
+            ApplyDataContextUpdates(obj, pushToHtml);
             return true;
         }
 
@@ -3404,6 +3771,34 @@ namespace RadEdit
             return true;
         }
 
+        private JsonNode? ResolveDataContextValue(string? payload)
+        {
+            lock (dataContextLock)
+            {
+                if (string.IsNullOrWhiteSpace(payload))
+                {
+                    return dataContext.DeepClone();
+                }
+
+                string keyPath = payload.Trim();
+                JsonNode? node = dataContext;
+                foreach (var part in keyPath.Split('.', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    if (node is JsonObject obj && obj.TryGetPropertyValue(part, out JsonNode? next))
+                    {
+                        node = next;
+                    }
+                    else
+                    {
+                        node = null;
+                        break;
+                    }
+                }
+
+                return node?.DeepClone();
+            }
+        }
+
         private bool TrySendDataContext(IntPtr recipient, string? payload)
         {
             if (recipient == IntPtr.Zero)
@@ -3411,38 +3806,138 @@ namespace RadEdit
                 return false;
             }
 
-            string response;
-            lock (dataContextLock)
-            {
-                if (string.IsNullOrWhiteSpace(payload))
-                {
-                    response = dataContext.ToJsonString();
-                }
-                else
-                {
-                    string keyPath = payload.Trim();
-                    JsonNode? node = dataContext;
-                    foreach (var part in keyPath.Split('.', StringSplitOptions.RemoveEmptyEntries))
-                    {
-                        if (node is JsonObject obj && obj.TryGetPropertyValue(part, out JsonNode? next))
-                        {
-                            node = next;
-                        }
-                        else
-                        {
-                            node = null;
-                            break;
-                        }
-                    }
-
-                    response = node?.ToJsonString() ?? "null";
-                }
-            }
-
+            JsonNode? node = ResolveDataContextValue(payload);
+            string response = node?.ToJsonString() ?? "null";
             return NativeMethods.SendCopyData(recipient, CopyDataCommand.DataContextResponse, response);
         }
 
-        private void ApplyDataContextUpdates(JsonObject updates)
+        private void HandleDataContextSetMessage(CoreWebView2? senderCore, string json)
+        {
+            _ = senderCore;
+            try
+            {
+                using var doc = JsonDocument.Parse(json);
+                if (!doc.RootElement.TryGetProperty("data", out JsonElement dataElement) ||
+                    dataElement.ValueKind == JsonValueKind.Null)
+                {
+                    TrySetDataContext(null);
+                    return;
+                }
+
+                if (dataElement.ValueKind == JsonValueKind.Object)
+                {
+                    TrySetDataContext(dataElement.GetRawText());
+                    return;
+                }
+
+                if (dataElement.ValueKind == JsonValueKind.String)
+                {
+                    string? raw = dataElement.GetString();
+                    if (string.IsNullOrWhiteSpace(raw))
+                    {
+                        TrySetDataContext(null);
+                        return;
+                    }
+
+                    TrySetDataContext(raw);
+                    return;
+                }
+
+                LogDebug("Data context set ignored: data must be an object.");
+            }
+            catch (Exception ex)
+            {
+                LogDebug("Data context set failed: " + ex.Message);
+            }
+        }
+
+        private void HandleDataContextRequestMessage(CoreWebView2? senderCore, string json)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(json);
+                string? requestId = null;
+                string? path = null;
+
+                if (doc.RootElement.TryGetProperty("requestId", out JsonElement idElement) &&
+                    idElement.ValueKind == JsonValueKind.String)
+                {
+                    requestId = idElement.GetString();
+                }
+
+                if (doc.RootElement.TryGetProperty("path", out JsonElement pathElement) &&
+                    pathElement.ValueKind == JsonValueKind.String)
+                {
+                    path = pathElement.GetString();
+                }
+
+                JsonNode? node = ResolveDataContextValue(path);
+                var payload = new JsonObject
+                {
+                    ["type"] = DataContextResponseMessageType,
+                    ["data"] = node ?? JsonNode.Parse("null")
+                };
+
+                if (!string.IsNullOrWhiteSpace(requestId))
+                {
+                    payload["requestId"] = requestId;
+                }
+
+                PostWebMessageToCore(senderCore, payload);
+            }
+            catch (Exception ex)
+            {
+                LogDebug("Data context request failed: " + ex.Message);
+            }
+        }
+
+        private void HandleHtmlViewMessage(CoreWebView2? senderCore, string json)
+        {
+            _ = senderCore;
+            try
+            {
+                using var doc = JsonDocument.Parse(json);
+                if (!doc.RootElement.TryGetProperty("options", out JsonElement optionsElement))
+                {
+                    LogDebug("View update ignored: missing options.");
+                    return;
+                }
+
+                HtmlViewOptions? options = null;
+                bool parsed = false;
+
+                if (optionsElement.ValueKind == JsonValueKind.String)
+                {
+                    string? content = optionsElement.GetString();
+                    parsed = !string.IsNullOrWhiteSpace(content) &&
+                             TryParseHtmlViewOptions(content, out options);
+                }
+                else if (optionsElement.ValueKind == JsonValueKind.Object)
+                {
+                    parsed = TryParseHtmlViewOptions(optionsElement, out options);
+                }
+
+                if (!parsed || options == null)
+                {
+                    LogDebug("View update ignored: invalid options.");
+                    return;
+                }
+
+                ApplyHtmlViewOptions(options);
+            }
+            catch (Exception ex)
+            {
+                LogDebug("View update failed: " + ex.Message);
+            }
+        }
+
+        private static bool IsReservedDataContextKey(string key)
+        {
+            return string.Equals(key, DataContextModeKey, StringComparison.Ordinal) ||
+                   string.Equals(key, DataContextDataKey, StringComparison.Ordinal);
+        }
+
+        private void ApplyDataContextUpdates(JsonObject updates, bool pushToHtml)
         {
             if (updates.Count == 0)
             {
@@ -3458,8 +3953,7 @@ namespace RadEdit
                     continue;
                 }
 
-                if (string.Equals(kvp.Key, DataContextModeKey, StringComparison.Ordinal) ||
-                    string.Equals(kvp.Key, DataContextDataKey, StringComparison.Ordinal))
+                if (IsReservedDataContextKey(kvp.Key))
                 {
                     continue;
                 }
@@ -3473,7 +3967,7 @@ namespace RadEdit
                 TryUpdateRtfRegion(kvp.Key, kvp.Value);
             }
 
-            if (!isHtmlMode || htmlUpdates.Count == 0)
+            if (!pushToHtml || !isHtmlMode || htmlUpdates.Count == 0)
             {
                 return;
             }
@@ -3483,23 +3977,116 @@ namespace RadEdit
                 try
                 {
                     await EnsureWebView2InitializedAsync();
-                    if (webView2.CoreWebView2 == null)
-                    {
-                        return;
-                    }
-
                     var payload = new JsonObject
                     {
                         ["type"] = DataContextMessageType,
                         ["data"] = htmlUpdates
                     };
-                    webView2.CoreWebView2.PostWebMessageAsJson(payload.ToJsonString());
+                    PostWebMessageToHtml(payload);
                 }
                 catch
                 {
                     // Ignore failures if the WebView isn't ready.
                 }
             }));
+        }
+
+        private void PushDataContextSnapshotToHtml()
+        {
+            if (!isHtmlMode)
+            {
+                return;
+            }
+
+            JsonObject snapshot = GetDataContextSnapshot();
+            if (snapshot.Count == 0)
+            {
+                return;
+            }
+
+            var htmlUpdates = new JsonObject();
+            foreach (var kvp in snapshot)
+            {
+                if (string.IsNullOrWhiteSpace(kvp.Key) || IsReservedDataContextKey(kvp.Key))
+                {
+                    continue;
+                }
+
+                htmlUpdates[kvp.Key] = kvp.Value?.DeepClone();
+            }
+
+            if (htmlUpdates.Count == 0)
+            {
+                return;
+            }
+
+            var payload = new JsonObject
+            {
+                ["type"] = DataContextMessageType,
+                ["data"] = htmlUpdates
+            };
+            PostWebMessageToHtml(payload);
+        }
+
+        private JsonObject GetDataContextSnapshot()
+        {
+            lock (dataContextLock)
+            {
+                return (JsonObject)dataContext.DeepClone();
+            }
+        }
+
+        private void PostWebMessageToHtml(JsonObject payload)
+        {
+            if (!isHtmlMode)
+            {
+                return;
+            }
+
+            string json = payload.ToJsonString();
+            var targets = new HashSet<CoreWebView2>();
+            if (webView2.CoreWebView2 != null)
+            {
+                targets.Add(webView2.CoreWebView2);
+            }
+
+            foreach (var core in webView2LocalRoots.Keys)
+            {
+                if (core != null)
+                {
+                    targets.Add(core);
+                }
+            }
+
+            foreach (var core in targets)
+            {
+                try
+                {
+                    core.PostWebMessageAsJson(json);
+                }
+                catch
+                {
+                    // Ignore failures if a WebView is no longer available.
+                }
+            }
+        }
+
+        private void PostWebMessageToCore(CoreWebView2? core, JsonObject payload)
+        {
+            CoreWebView2? target = core ?? webView2.CoreWebView2;
+            if (target == null)
+            {
+                return;
+            }
+
+            try
+            {
+                target.PostWebMessageAsJson(payload.ToJsonString());
+            }
+            catch
+            {
+                // Ignore failures if the WebView isn't ready.
+            }
         }
 
         private void ApplyStoredDataContextToRtf()
@@ -3522,8 +4109,7 @@ namespace RadEdit
                     continue;
                 }
 
-                if (string.Equals(kvp.Key, DataContextModeKey, StringComparison.Ordinal) ||
-                    string.Equals(kvp.Key, DataContextDataKey, StringComparison.Ordinal))
+                if (IsReservedDataContextKey(kvp.Key))
                 {
                     continue;
                 }
@@ -4502,7 +5088,7 @@ namespace RadEdit
                 return $"{parsed.Major}.{parsed.Minor}";
             }
 
-            return "0.2.3";
+            return "0.2.4";
         }
 
         private static class NativeMethods

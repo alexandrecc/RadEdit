@@ -158,6 +158,8 @@ Run `examples\data-context-demo.ahk` to send a `SetDataContext` JSON payload and
 
 Run `examples\html-routing-setdatacontext-test.ahk` to load the HTML routing demo and send a richer `SetDataContext` payload that updates both HTML fields and RTF placeholders.
 
+Open `examples\html-datacontext-demo.html` in RadEdit to see HTML header seeding (`radedit:context`), `window.RadEdit.setDataContext` / `getDataContext`, and `window.RadEdit.updateView` in action. The launcher script `examples\html-datacontext-demo.ahk` loads it for you.
+
 ## HTML to RTF Routing
 
 When HTML mode is active, form fields can push text into hidden regions in the RTF. Define the region in the RTF with hidden markers:
@@ -212,6 +214,31 @@ Notes:
 - `target: "region"` requires `region` and expects an RTF fragment (no `{\rtf...}` header).
 - `target: "caret"` / `target: "end"` accept fragments or full RTF documents.
 
+## WebView Data Context Commands
+
+HTML pages can also set or query the data context via the injected `window.RadEdit` API:
+
+```html
+<script>
+  // merge values into the data context
+  window.RadEdit.setDataContext({ patientId: "123456", accession: "ABC-2026-0001" });
+
+  // replace the entire context
+  window.RadEdit.setDataContext({ "__mode": "replace", "data": { patientId: "123456" } });
+
+  // clear the context
+  window.RadEdit.setDataContext();
+
+  // read the full context
+  window.RadEdit.getDataContext().then((ctx) => console.log(ctx));
+
+  // read a single value
+  window.RadEdit.getDataContext("patientId").then((value) => console.log(value));
+</script>
+```
+
+`getDataContext` returns `null` for missing keys (mirrors the WM_COPYDATA command).
+
 ## HTML Caching
 
 Local HTML files loaded through `SetHtmlFile` are served with `no-store` cache headers so edits are picked up immediately. Remote URLs keep the default WebView2 cache behavior.
@@ -253,6 +280,41 @@ Examples live in:
 - `examples\html-view-meta-split-50.html`
 - `examples\html-view-meta-pop.html`
 - `examples\html-view-meta-full-monitor-1.html`
+
+## HTML View Updates (JavaScript)
+
+HTML pages can update the view layout at runtime using the injected `window.RadEdit.updateView` helper. It accepts the same keys as the metadata header.
+
+```html
+<script>
+  // split view at 40%
+  window.RadEdit.updateView({ mode: "split", size: 40 });
+
+  // popout to monitor 2, with explicit bounds
+  window.RadEdit.updateView({ mode: "pop", monitor: 2, x: 100, y: 80, width: 900, height: 650 });
+
+  // fullscreen on monitor 1
+  window.RadEdit.updateView({ mode: "full", monitor: 1 });
+
+  // or pass the same "key=value" string used by the meta tag
+  window.RadEdit.updateView("mode=split;size=50");
+</script>
+```
+
+## HTML Data Context Metadata
+
+Local HTML files can also seed the data context with a meta tag. The content can be JSON or simple key/value pairs.
+
+```
+<meta name="radedit:context" content='{"patientId":"123456","accession":"ABC-2026-0001"}'>
+<meta name="radedit:context" content="patientId=123456; accession=ABC-2026-0001">
+```
+
+To replace the entire context, use the JSON replace payload:
+
+```
+<meta name="radedit:context" content='{"__mode":"replace","data":{"patientId":"123456"}}'>
+```
 
 ## Troubleshooting
 

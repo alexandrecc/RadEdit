@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="radedit:view" content="mode=split;size=55">
+    <meta name="radedit:context" content='{"patientId":"HX-2026-0042","accession":"ACC-2026-1105","source":"meta"}'>
+    <title>RadEdit Data Context + View Demo</title>
+    <style>
+        :root {
+            --bg: #f6f4f0;
+            --panel: #ffffff;
+            --ink: #1b1b1b;
+            --muted: #6b6b6b;
+            --accent: #0e7490;
+            --accent-dark: #155e75;
+            --border: #d7d2c8;
+            --shadow: 0 18px 35px rgba(20, 20, 20, 0.12);
+            --radius: 14px;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: "Segoe UI", system-ui, sans-serif;
+            color: var(--ink);
+            background: radial-gradient(circle at top left, #fff6e7 0%, #f6f4f0 45%, #e6f3f8 100%);
+            min-height: 100vh;
+            padding: 2.5rem 1.5rem;
+        }
+
+        .shell {
+            max-width: 980px;
+            margin: 0 auto;
+            display: grid;
+            gap: 1.5rem;
+        }
+
+        header {
+            background: var(--panel);
+            border-radius: var(--radius);
+            padding: 1.5rem 2rem;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--border);
+        }
+
+        header h1 {
+            margin: 0 0 0.5rem 0;
+            font-size: 1.8rem;
+        }
+
+        header p {
+            margin: 0;
+            color: var(--muted);
+        }
+
+        .grid {
+            display: grid;
+            gap: 1.5rem;
+        }
+
+        @media (min-width: 860px) {
+            .grid {
+                grid-template-columns: 1.1fr 0.9fr;
+            }
+        }
+
+        .card {
+            background: var(--panel);
+            border-radius: var(--radius);
+            padding: 1.5rem;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--border);
+        }
+
+        .card h2 {
+            margin: 0 0 1rem 0;
+            font-size: 1.15rem;
+        }
+
+        label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 0.4rem;
+        }
+
+        input, textarea {
+            width: 100%;
+            padding: 0.65rem 0.75rem;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            font-size: 0.95rem;
+            background: #fffdf8;
+        }
+
+        textarea {
+            min-height: 120px;
+            resize: vertical;
+        }
+
+        .field {
+            margin-bottom: 1rem;
+        }
+
+        .pill {
+            display: inline-block;
+            background: #e7f4f6;
+            color: #0f4c5c;
+            padding: 0.2rem 0.6rem;
+            border-radius: 999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.6rem;
+        }
+
+        button {
+            border: none;
+            background: var(--accent);
+            color: #fff;
+            padding: 0.55rem 0.9rem;
+            border-radius: 10px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.15s ease;
+        }
+
+        button.secondary {
+            background: #f2efe9;
+            color: var(--ink);
+            border: 1px solid var(--border);
+        }
+
+        button:hover {
+            background: var(--accent-dark);
+        }
+
+        button.secondary:hover {
+            background: #eae5dc;
+        }
+
+        pre {
+            background: #0f172a;
+            color: #e2e8f0;
+            padding: 1rem;
+            border-radius: 12px;
+            overflow-x: auto;
+            font-size: 0.85rem;
+        }
+
+        .note {
+            font-size: 0.85rem;
+            color: var(--muted);
+        }
+    </style>
+</head>
+<body>
+    <div class="shell">
+        <header>
+            <h1>RadEdit HTML Data Context Demo</h1>
+            <p>Shows HTML meta seeding, JS `set/getDataContext`, and `updateView`.</p>
+        </header>
+
+        <div class="grid">
+            <section class="card">
+                <h2>HTML Fields (auto-filled from data context)</h2>
+                <p class="note">Seeded by the HTML header: <span class="pill">radedit:context</span></p>
+                <div class="field">
+                    <label for="patientId">Patient ID</label>
+                    <input id="patientId" data-field="patientId" data-target-region="PATIENT_ID" placeholder="HX-2026-0042">
+                </div>
+                <div class="field">
+                    <label for="accession">Accession</label>
+                    <input id="accession" data-field="accession" data-target-region="ACCESSION" placeholder="ACC-2026-1105">
+                </div>
+                <div class="field">
+                    <label for="notes">Notes</label>
+                    <textarea id="notes" data-field="notes" data-target-region="NOTES" placeholder="Type here..."></textarea>
+                </div>
+                <p class="note">Changing a field also routes to RTF regions if they exist.</p>
+            </section>
+
+            <section class="card">
+                <h2>JS Helpers</h2>
+                <div class="actions" style="margin-bottom:1rem;">
+                    <button id="mergeCtx">Merge Context</button>
+                    <button id="replaceCtx" class="secondary">Replace Context</button>
+                    <button id="clearCtx" class="secondary">Clear Context</button>
+                    <button id="getPatient">Get `patientId`</button>
+                </div>
+                <div class="actions" style="margin-bottom:1rem;">
+                    <button id="viewSplit" class="secondary">View Split 45%</button>
+                    <button id="viewPop" class="secondary">View Pop</button>
+                    <button id="viewFull" class="secondary">View Full</button>
+                </div>
+                <p class="note">Current data context:</p>
+                <pre id="ctxDump">Waiting for RadEdit...</pre>
+                <p class="note">Last value lookup:</p>
+                <pre id="valueDump">None</pre>
+            </section>
+        </div>
+    </div>
+
+    <script>
+        const ctxDump = document.getElementById("ctxDump");
+        const valueDump = document.getElementById("valueDump");
+
+        const hasRadEdit = () => window.RadEdit && typeof window.RadEdit.getDataContext === "function";
+
+        async function refreshContext() {
+            if (!hasRadEdit()) {
+                ctxDump.textContent = "RadEdit helpers not available.";
+                return;
+            }
+            const ctx = await window.RadEdit.getDataContext();
+            ctxDump.textContent = JSON.stringify(ctx, null, 2);
+        }
+
+        document.getElementById("mergeCtx").addEventListener("click", async () => {
+            if (!window.RadEdit) return;
+            window.RadEdit.setDataContext({
+                patientId: "HX-2026-7788",
+                accession: "ACC-2026-9911",
+                notes: "Merged from JS",
+                source: "js-merge"
+            });
+            await refreshContext();
+        });
+
+        document.getElementById("replaceCtx").addEventListener("click", async () => {
+            if (!window.RadEdit) return;
+            window.RadEdit.setDataContext({
+                "__mode": "replace",
+                "data": {
+                    patientId: "HX-REPLACED-0001",
+                    accession: "ACC-REPLACED-0001",
+                    source: "js-replace"
+                }
+            });
+            await refreshContext();
+        });
+
+        document.getElementById("clearCtx").addEventListener("click", async () => {
+            if (!window.RadEdit) return;
+            window.RadEdit.setDataContext();
+            await refreshContext();
+        });
+
+        document.getElementById("getPatient").addEventListener("click", async () => {
+            if (!hasRadEdit()) return;
+            const value = await window.RadEdit.getDataContext("patientId");
+            valueDump.textContent = JSON.stringify(value, null, 2);
+        });
+
+        document.getElementById("viewSplit").addEventListener("click", () => {
+            if (!window.RadEdit) return;
+            window.RadEdit.updateView({ mode: "split", size: 45 });
+        });
+
+        document.getElementById("viewPop").addEventListener("click", () => {
+            if (!window.RadEdit) return;
+            window.RadEdit.updateView({ mode: "pop", x: 120, y: 80, width: 900, height: 650 });
+        });
+
+        document.getElementById("viewFull").addEventListener("click", () => {
+            if (!window.RadEdit) return;
+            window.RadEdit.updateView({ mode: "full", monitor: 1 });
+        });
+
+        refreshContext();
+    </script>
+</body>
+</html>

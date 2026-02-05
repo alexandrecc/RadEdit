@@ -1,0 +1,1386 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="radedit:view" content="mode=split;size=100">
+  <title>Mammographie</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      font-size: 14px;
+      margin: 20px;
+      line-height: 1.4;
+      padding-bottom: 90px;
+    }
+    h1, h2, h3 { margin-top: 1.2em; }
+    fieldset {
+      border: 1px solid #ccc;
+      padding: 10px 15px;
+      margin-bottom: 15px;
+    }
+    legend { font-weight: bold; padding: 0 4px; }
+    .row { display: flex; flex-wrap: wrap; margin-bottom: 6px; }
+    .row label { margin-right: 10px; }
+    .readonly-input { width: 260px; }
+    .info-grid { display: flex; gap: 20px; flex-wrap: wrap; }
+    .info-col { flex: 1 1 260px; }
+    .readonly-input-wide { width: 720px; }
+    .checkbox-group, .radio-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 16px;
+      align-items: center;
+    }
+    .lesion-block {
+      border: 1px solid #aaa;
+      padding: 10px;
+      margin-top: 10px;
+      border-radius: 4px;
+    }
+    .lesion-title { font-weight: bold; margin-bottom: 5px; }
+    .small-input { width: 70px; }
+    .section { margin-top: 15px; }
+    button { padding: 6px 12px; cursor: pointer; margin-top: 10px; }
+    .inline-label { margin-right: 10px; }
+
+    .footer-bar {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: #fff;
+      border-top: 1px solid #ccc;
+      padding: 10px 20px;
+      z-index: 9999;
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+    }
+
+    /* Petit bloc “mode” */
+    .mode-wrap {
+      display: flex;
+      gap: 18px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .mode-wrap label {
+      display: inline-flex;
+      gap: 8px;
+      align-items: center;
+      cursor: pointer;
+      user-select: none;
+    }
+  </style>
+</head>
+
+<body>
+
+  <!-- RTF output is sent directly via window.RadEdit.sendRtf (no hidden fields). -->
+
+  <!-- MODE (Dicter vs Dépistage) -->
+  <fieldset>
+    <legend>Mode</legend>
+    <div class="mode-wrap">
+      <label><input type="checkbox" id="ModeDepistage"> Dépistage</label>
+      <label><input type="checkbox" id="ModeDicter"> Dicter</label>
+      <span style="font-size:12px;color:#555;">
+        (Une seule option à la fois)
+      </span>
+    </div>
+  </fieldset>
+
+  <!-- INFOS PATIENT (remplies par AHK / non modifiables) -->
+  <fieldset>
+    <legend>Informations patient</legend>
+
+    <div class="info-grid">
+      <div class="info-col">
+        <div class="row">
+          <label for="PatName">Nom patient :</label>
+          <input type="text" id="PatName" class="readonly-input" value="@@NOM_PAT@@" readonly>
+        </div>
+        <div class="row">
+          <label for="NumDos">No dossier :</label>
+          <input type="text" id="NumDos" class="readonly-input" value="@@NUM_DOS@@" readonly>
+        </div>
+      </div>
+
+      <div class="info-col">
+        <div class="row">
+          <label for="RebNb">No visite :</label>
+          <input type="text" id="RebNb" class="readonly-input" value="@@REQNB@@" readonly>
+        </div>
+        <div class="row">
+          <label for="DateExam">Date d'examen :</label>
+          <input type="text" id="DateExam" class="readonly-input" value="@@DATE_EXAM@@" readonly>
+        </div>
+      </div>
+    </div>
+
+    <div class="row" style="margin-top: 0px;">
+      <label for="proc">Examen :</label>
+      <input type="text" id="proc" class="readonly-input-wide" value="@@EXAMEN@@" readonly>
+    </div>
+  </fieldset>
+
+  <!-- Tout le reste du formulaire (caché en mode Dicter) -->
+  <div id="mammoFormBody">
+
+    <fieldset>
+      <legend>Renseignements cliniques</legend>
+      <div class="section">
+        <div class="checkbox-group">
+          <label><input type="checkbox" id="TypeExam_Depistage" name="TypeExam" value="Dépistage"> Dépistage</label>
+          <label><input type="checkbox" id="TypeExam_SuiviNeo"  name="TypeExam" value="Suivi antécédent de néoplasie"> Suivi antécédent de néoplasie</label>
+          <label><input type="checkbox" id="TypeExam_SuiviHR"   name="TypeExam" value="Suivi lésion haut risque"> Suivi lésion haut risque</label>
+          <label><input type="checkbox" id="TypeExam_SuiviCtrl" name="TypeExam" value="Suivi/Contrôle"> Suivi / Contrôle</label>
+          <label><input type="checkbox" id="TypeExam_Autre"     name="TypeExam" value="Autre"> Autre</label>
+          <input type="text" id="TypeExam_AutreTxt" placeholder="Préciser si Autre" style="display:none;">
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Aspect parenchyme</legend>
+      <div class="section">
+        <div class="radio-group">
+          <label><input type="radio" name="AspectPar" value="Seins involués"> Seins involués</label>
+          <label><input type="radio" name="AspectPar" value="Seins peu denses"> Seins peu denses</label>
+          <label><input type="radio" name="AspectPar" value="Seins modérément denses"> Seins modérément denses</label>
+          <label><input type="radio" name="AspectPar" value="Seins très denses"> Seins très denses</label>
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <div class="section">
+        <div class="checkbox-group">
+          <label><input type="checkbox" id="ATCDneo"> ATCD néoplasie opérée</label>
+          <label><input type="checkbox" id="ATCDfam"> ATCD familiaux +</label>
+          <label><input type="checkbox" id="SuiviHR"> Suivi lésion haut risque</label>
+          <input type="text" id="SuiviHR_Txt" placeholder="Préciser (optionnel)">
+          <label><input type="checkbox" id="Protheses"> Prothèses</label>
+          <label><input type="checkbox" id="Tomo"> Tomosynthèse</label>
+          <label><input type="checkbox" id="Mammo1"> 1ère mammographie</label>
+        </div>
+
+        <div id="postOpRow" class="section" style="display:none;">
+          <label><input type="checkbox" id="PostOp1"> 1er post-op</label>
+        </div>
+      </div>
+    </fieldset>
+
+    <!-- INTERPRÉTATION -->
+    <fieldset>
+      <legend>Résultat</legend>
+      <div class="section">
+        <div class="checkbox-group">
+          <label><input type="checkbox" id="Res_Normal"> Normal</label>
+          <label><input type="checkbox" id="Res_Inchange"> Inchangé</label>
+          <label><input type="checkbox" id="Res_Anormal"> Anormal</label>
+          <label><input type="checkbox" id="Res_NormalBenin"> Normal, lésion bénigne</label>
+        </div>
+      </div>
+
+      <!-- Suivi -->
+      <div id="suiviOptionsBlock" class="section" style="display:none;">
+        <h3>Suivi</h3>
+        <div class="row">
+          <span class="inline-label">Revoir :</span>
+          <label class="inline-label"><input type="radio" name="SuiviResult" value="Revoir 6 mois"> 6 mois</label>
+          <label class="inline-label"><input type="radio" name="SuiviResult" value="Revoir 1 an"> 1 an</label>
+          <label class="inline-label"><input type="radio" name="SuiviResult" value="Revoir 2 ans"> 2 ans</label>
+        </div>
+      </div>
+
+      <!-- Anormal : référence pour confirmation diagnostique -->
+      <div id="anormalSection" class="section" style="display:none;">
+        <h3>Anormal – Référence pour confirmation diagnostique</h3>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="text-align:left;"></th>
+              <th style="text-align:left;">Sein droit</th>
+              <th style="text-align:left;">Sein gauche</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Lésion unique</td>
+              <td><input type="radio" name="RefDroit" value="Lesion unique"></td>
+              <td><input type="radio" name="RefGauche" value="Lesion unique"></td>
+            </tr>
+            <tr>
+              <td>Lésions multiples</td>
+              <td><input type="radio" name="RefDroit" value="Lesions multiples"></td>
+              <td><input type="radio" name="RefGauche" value="Lesions multiples"></td>
+            </tr>
+            <tr>
+              <td>Lésion diffuse</td>
+              <td><input type="radio" name="RefDroit" value="Lesion diffuse"></td>
+              <td><input type="radio" name="RefGauche" value="Lesion diffuse"></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- LÉSONS (1 à 5) -->
+      <div id="lesionsWrapper" class="section" style="display:none;">
+        <h3>Lésions</h3>
+
+        <!-- Bloc Lésion 1 -->
+        <div id="lesionBlock1" class="lesion-block">
+          <div class="lesion-title">Lésion 1</div>
+
+          <div class="section">
+            <strong>Type de lésion (obligatoire) :</strong>
+            <div class="checkbox-group">
+              <label><input type="checkbox" name="LesionType_1" value="Microcalcification"> Microcalcification</label>
+              <label><input type="checkbox" name="LesionType_1" value="Masse"> Masse</label>
+              <label><input type="checkbox" name="LesionType_1" value="Distorsion"> Distorsion</label>
+              <label><input type="checkbox" name="LesionType_1" value="Densité asymétrique"> Densité asymétrique</label>
+              <label><input type="checkbox" name="LesionType_1" value="Autre"> Autre</label>
+              <input type="text" id="LesionAutre_1" placeholder="Préciser si Autre">
+            </div>
+          </div>
+
+          <div class="section">
+            <strong>Localisation (obligatoire) :</strong>
+            <div class="row">
+              <span class="inline-label">Sein :</span>
+              <label class="inline-label"><input type="radio" name="LocSide_1" value="Droit"> Droit</label>
+              <label class="inline-label"><input type="radio" name="LocSide_1" value="Gauche"> Gauche</label>
+            </div>
+            <div class="row">
+              <span class="inline-label">CC :</span>
+              <label class="inline-label"><input type="checkbox" name="LocCC_1" value="Externe"> Externe</label>
+              <label class="inline-label"><input type="checkbox" name="LocCC_1" value="Central"> Central</label>
+              <label class="inline-label"><input type="checkbox" name="LocCC_1" value="Interne"> Interne</label>
+              <label class="inline-label"><input type="checkbox" name="LocCC_1" value="Non décelable"> Non décelable</label>
+            </div>
+            <div class="row">
+              <span class="inline-label">MLO :</span>
+              <label class="inline-label"><input type="checkbox" name="LocMLO_1" value="Supérieur"> Supérieur</label>
+              <label class="inline-label"><input type="checkbox" name="LocMLO_1" value="Central"> Central</label>
+              <label class="inline-label"><input type="checkbox" name="LocMLO_1" value="Inférieur"> Inférieur</label>
+              <label class="inline-label"><input type="checkbox" name="LocMLO_1" value="Non décelable"> Non décelable</label>
+            </div>
+          </div>
+
+          <div class="section">
+            <strong>Taille (cm) :</strong>
+            <input type="text" id="Taille_1" class="small-input" placeholder="ex. 1,2">
+          </div>
+        </div>
+
+        <!-- Bloc Lésion 2 -->
+        <div id="lesionBlock2" class="lesion-block" style="display:none;">
+          <div class="lesion-title">Lésion 2</div>
+
+          <div class="section">
+            <strong>Type de lésion (obligatoire) :</strong>
+            <div class="checkbox-group">
+              <label><input type="checkbox" name="LesionType_2" value="Microcalcification"> Microcalcification</label>
+              <label><input type="checkbox" name="LesionType_2" value="Masse"> Masse</label>
+              <label><input type="checkbox" name="LesionType_2" value="Distorsion"> Distorsion</label>
+              <label><input type="checkbox" name="LesionType_2" value="Densité asymétrique"> Densité asymétrique</label>
+              <label><input type="checkbox" name="LesionType_2" value="Autre"> Autre</label>
+              <input type="text" id="LesionAutre_2" placeholder="Préciser si Autre">
+            </div>
+          </div>
+
+          <div class="section">
+            <strong>Localisation (obligatoire) :</strong>
+            <div class="row">
+              <span class="inline-label">Sein :</span>
+              <label class="inline-label"><input type="radio" name="LocSide_2" value="Droit"> Droit</label>
+              <label class="inline-label"><input type="radio" name="LocSide_2" value="Gauche"> Gauche</label>
+            </div>
+            <div class="row">
+              <span class="inline-label">CC :</span>
+              <label class="inline-label"><input type="checkbox" name="LocCC_2" value="Externe"> Externe</label>
+              <label class="inline-label"><input type="checkbox" name="LocCC_2" value="Central"> Central</label>
+              <label class="inline-label"><input type="checkbox" name="LocCC_2" value="Interne"> Interne</label>
+              <label class="inline-label"><input type="checkbox" name="LocCC_2" value="Non décelable"> Non décelable</label>
+            </div>
+            <div class="row">
+              <span class="inline-label">MLO :</span>
+              <label class="inline-label"><input type="checkbox" name="LocMLO_2" value="Supérieur"> Supérieur</label>
+              <label class="inline-label"><input type="checkbox" name="LocMLO_2" value="Central"> Central</label>
+              <label class="inline-label"><input type="checkbox" name="LocMLO_2" value="Inférieur"> Inférieur</label>
+              <label class="inline-label"><input type="checkbox" name="LocMLO_2" value="Non décelable"> Non décelable</label>
+            </div>
+          </div>
+
+          <div class="section">
+            <strong>Taille (cm) :</strong>
+            <input type="text" id="Taille_2" class="small-input" placeholder="ex. 1,2">
+          </div>
+        </div>
+
+        <!-- Bloc Lésion 3 -->
+        <div id="lesionBlock3" class="lesion-block" style="display:none;">
+          <div class="lesion-title">Lésion 3</div>
+
+          <div class="section">
+            <strong>Type de lésion (obligatoire) :</strong>
+            <div class="checkbox-group">
+              <label><input type="checkbox" name="LesionType_3" value="Microcalcification"> Microcalcification</label>
+              <label><input type="checkbox" name="LesionType_3" value="Masse"> Masse</label>
+              <label><input type="checkbox" name="LesionType_3" value="Distorsion"> Distorsion</label>
+              <label><input type="checkbox" name="LesionType_3" value="Densité asymétrique"> Densité asymétrique</label>
+              <label><input type="checkbox" name="LesionType_3" value="Autre"> Autre</label>
+              <input type="text" id="LesionAutre_3" placeholder="Préciser si Autre">
+            </div>
+          </div>
+
+          <div class="section">
+            <strong>Localisation (obligatoire) :</strong>
+            <div class="row">
+              <span class="inline-label">Sein :</span>
+              <label class="inline-label"><input type="radio" name="LocSide_3" value="Droit"> Droit</label>
+              <label class="inline-label"><input type="radio" name="LocSide_3" value="Gauche"> Gauche</label>
+            </div>
+            <div class="row">
+              <span class="inline-label">CC :</span>
+              <label class="inline-label"><input type="checkbox" name="LocCC_3" value="Externe"> Externe</label>
+              <label class="inline-label"><input type="checkbox" name="LocCC_3" value="Central"> Central</label>
+              <label class="inline-label"><input type="checkbox" name="LocCC_3" value="Interne"> Interne</label>
+              <label class="inline-label"><input type="checkbox" name="LocCC_3" value="Non décelable"> Non décelable</label>
+            </div>
+            <div class="row">
+              <span class="inline-label">MLO :</span>
+              <label class="inline-label"><input type="checkbox" name="LocMLO_3" value="Supérieur"> Supérieur</label>
+              <label class="inline-label"><input type="checkbox" name="LocMLO_3" value="Central"> Central</label>
+              <label class="inline-label"><input type="checkbox" name="LocMLO_3" value="Inférieur"> Inférieur</label>
+              <label class="inline-label"><input type="checkbox" name="LocMLO_3" value="Non décelable"> Non décelable</label>
+            </div>
+          </div>
+
+          <div class="section">
+            <strong>Taille (cm) :</strong>
+            <input type="text" id="Taille_3" class="small-input" placeholder="ex. 1,2">
+          </div>
+        </div>
+
+        <!-- Bloc Lésion 4 -->
+        <div id="lesionBlock4" class="lesion-block" style="display:none;">
+          <div class="lesion-title">Lésion 4</div>
+
+          <div class="section">
+            <strong>Type de lésion (obligatoire) :</strong>
+            <div class="checkbox-group">
+              <label><input type="checkbox" name="LesionType_4" value="Microcalcification"> Microcalcification</label>
+              <label><input type="checkbox" name="LesionType_4" value="Masse"> Masse</label>
+              <label><input type="checkbox" name="LesionType_4" value="Distorsion"> Distorsion</label>
+              <label><input type="checkbox" name="LesionType_4" value="Densité asymétrique"> Densité asymétrique</label>
+              <label><input type="checkbox" name="LesionType_4" value="Autre"> Autre</label>
+              <input type="text" id="LesionAutre_4" placeholder="Préciser si Autre">
+            </div>
+          </div>
+
+          <div class="section">
+            <strong>Localisation (obligatoire) :</strong>
+            <div class="row">
+              <span class="inline-label">Sein :</span>
+              <label class="inline-label"><input type="radio" name="LocSide_4" value="Droit"> Droit</label>
+              <label class="inline-label"><input type="radio" name="LocSide_4" value="Gauche"> Gauche</label>
+            </div>
+            <div class="row">
+              <span class="inline-label">CC :</span>
+              <label class="inline-label"><input type="checkbox" name="LocCC_4" value="Externe"> Externe</label>
+              <label class="inline-label"><input type="checkbox" name="LocCC_4" value="Central"> Central</label>
+              <label class="inline-label"><input type="checkbox" name="LocCC_4" value="Interne"> Interne</label>
+              <label class="inline-label"><input type="checkbox" name="LocCC_4" value="Non décelable"> Non décelable</label>
+            </div>
+            <div class="row">
+              <span class="inline-label">MLO :</span>
+              <label class="inline-label"><input type="checkbox" name="LocMLO_4" value="Supérieur"> Supérieur</label>
+              <label class="inline-label"><input type="checkbox" name="LocMLO_4" value="Central"> Central</label>
+              <label class="inline-label"><input type="checkbox" name="LocMLO_4" value="Inférieur"> Inférieur</label>
+              <label class="inline-label"><input type="checkbox" name="LocMLO_4" value="Non décelable"> Non décelable</label>
+            </div>
+          </div>
+
+          <div class="section">
+            <strong>Taille (cm) :</strong>
+            <input type="text" id="Taille_4" class="small-input" placeholder="ex. 1,2">
+          </div>
+        </div>
+
+        <!-- Bloc Lésion 5 -->
+        <div id="lesionBlock5" class="lesion-block" style="display:none;">
+          <div class="lesion-title">Lésion 5</div>
+
+          <div class="section">
+            <strong>Type de lésion (obligatoire) :</strong>
+            <div class="checkbox-group">
+              <label><input type="checkbox" name="LesionType_5" value="Microcalcification"> Microcalcification</label>
+              <label><input type="checkbox" name="LesionType_5" value="Masse"> Masse</label>
+              <label><input type="checkbox" name="LesionType_5" value="Distorsion"> Distorsion</label>
+              <label><input type="checkbox" name="LesionType_5" value="Densité asymétrique"> Densité asymétrique</label>
+              <label><input type="checkbox" name="LesionType_5" value="Autre"> Autre</label>
+              <input type="text" id="LesionAutre_5" placeholder="Préciser si Autre">
+            </div>
+          </div>
+
+          <div class="section">
+            <strong>Localisation (obligatoire) :</strong>
+            <div class="row">
+              <span class="inline-label">Sein :</span>
+              <label class="inline-label"><input type="radio" name="LocSide_5" value="Droit"> Droit</label>
+              <label class="inline-label"><input type="radio" name="LocSide_5" value="Gauche"> Gauche</label>
+            </div>
+            <div class="row">
+              <span class="inline-label">CC :</span>
+              <label class="inline-label"><input type="checkbox" name="LocCC_5" value="Externe"> Externe</label>
+              <label class="inline-label"><input type="checkbox" name="LocCC_5" value="Central"> Central</label>
+              <label class="inline-label"><input type="checkbox" name="LocCC_5" value="Interne"> Interne</label>
+              <label class="inline-label"><input type="checkbox" name="LocCC_5" value="Non décelable"> Non décelable</label>
+            </div>
+            <div class="row">
+              <span class="inline-label">MLO :</span>
+              <label class="inline-label"><input type="checkbox" name="LocMLO_5" value="Supérieur"> Supérieur</label>
+              <label class="inline-label"><input type="checkbox" name="LocMLO_5" value="Central"> Central</label>
+              <label class="inline-label"><input type="checkbox" name="LocMLO_5" value="Inférieur"> Inférieur</label>
+              <label class="inline-label"><input type="checkbox" name="LocMLO_5" value="Non décelable"> Non décelable</label>
+            </div>
+          </div>
+
+          <div class="section">
+            <strong>Taille (cm) :</strong>
+            <input type="text" id="Taille_5" class="small-input" placeholder="ex. 1,2">
+          </div>
+        </div>
+
+        <button type="button" id="addLesionBtn">Ajouter une lésion</button>
+        <button type="button" id="removeLesionBtn">Enlever la dernière lésion</button>
+      </div>
+
+      <!-- Examens supplémentaires -->
+      <div id="examensSuppSection" class="section" style="display:none;">
+        <h3>Examens supplémentaires</h3>
+        <div class="checkbox-group">
+          <label><input type="checkbox" name="ExamSuppl" value="Incidences supplémentaires (incluant Tomo)"> Incidences suppl. (incluant Tomo)</label>
+          <label><input type="checkbox" name="ExamSuppl" value="Agrandissement"> Agrandissement</label>
+          <label><input type="checkbox" name="ExamSuppl" value="Compression"> Compression</label>
+          <label><input type="checkbox" name="ExamSuppl" value="Échographie"> Échographie</label>
+          <label><input type="checkbox" name="ExamSuppl" value="Autre"> Autre</label>
+          <input type="text" id="ExamSuppl" placeholder="Préciser si Autre">
+        </div>
+      </div>
+
+      <!-- Notes complémentaires -->
+      <div id="notesSection" class="section" style="display:none;">
+        <h3>Notes complémentaires – Codes</h3>
+        <div class="checkbox-group">
+          <label><input type="checkbox" id="CodeS"> S</label>
+          <label><input type="checkbox" id="Code2"> 4</label>
+          <label><input type="checkbox" id="Code3"> 5</label>
+          <label><input type="checkbox" id="Code4"> 6</label>
+          <label><input type="checkbox" id="Code6"> Text box</label>
+        </div>
+
+        <div id="C6TextWrapper" style="display:none; margin-top:6px;">
+          <textarea id="Code6Text" rows="3" style="width:100%; font-size:12px;"></textarea>
+        </div>
+
+        <p style="font-size:12px;color:#555;">
+          S = Votre patiente a répondu "OUI" à la question "Avez-vous des problèmes aux seins qui sont apparus ou qui ont augmenté depuis deux ans" sur le questionnaire pré-mammographie. Une évaluation clinique est recommandée pour compléter et décider si une investigation supplémentaire est nécessaire. Au besoin, svp vous référer au questionnaire.<br>
+          4 = Prochaine mammographie de dépistage recommandée dans 1 an : antécédents familiaux positifs.<br>
+          5 = Prochaine mammographie de dépistage recommandée dans 1 an : microcalcifications d’allure bénigne (BI-RADS 3).<br>
+          6 = Prochaine mammographie de dépistage recommandée dans 1 an : lésion d’allure bénigne (BI-RADS 3).<br>
+        </p>
+      </div>
+    </fieldset>
+
+  </div><!-- /mammoFormBody -->
+
+  <div class="footer-bar">
+    <button type="button" onclick="generateReport()">Générer rapport</button>
+  </div>
+
+<script>
+  // =========================
+  // Helpers DOM
+  // =========================
+  function getInputValue(id) {
+    const el = document.getElementById(id);
+    return el ? el.value.trim() : "";
+  }
+  function isChecked(id) {
+    const el = document.getElementById(id);
+    return !!(el && el.checked);
+  }
+  function getRadioValue(name) {
+    const el = document.querySelector('input[name="' + name + '"]:checked');
+    return el ? el.value : "";
+  }
+
+  function escapeRtfText(text) {
+    if (text === null || text === undefined) return "";
+    const normalized = String(text).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    let out = "";
+    for (let i = 0; i < normalized.length; i++) {
+      const code = normalized.charCodeAt(i);
+      const ch = normalized[i];
+      if (ch === "\\") {
+        out += "\\\\";
+      } else if (ch === "{") {
+        out += "\\{";
+      } else if (ch === "}") {
+        out += "\\}";
+      } else if (ch === "\n") {
+        out += "\\par ";
+      } else if (ch === "\t") {
+        out += "\\tab ";
+      } else if (code <= 0x7f) {
+        out += ch;
+      } else {
+        out += "\\u" + code + "?";
+      }
+    }
+    return out;
+  }
+
+  function sendToRegion(regionName, text) {
+    const payload = (text && String(text).trim() !== "") ? String(text) : "[]";
+    const rtf = escapeRtfText(payload);
+    if (window.RadEdit && typeof window.RadEdit.sendRtf === "function") {
+      window.RadEdit.sendRtf({
+        target: "region",
+        region: regionName,
+        rtf: rtf
+      });
+      return;
+    }
+    console.warn("RadEdit.sendRtf is not available.");
+  }
+
+  function sendToRegionRtf(regionName, rtfFragment) {
+    const payload = (rtfFragment && String(rtfFragment).trim() !== "")
+      ? String(rtfFragment)
+      : escapeRtfText("[]");
+    if (window.RadEdit && typeof window.RadEdit.sendRtf === "function") {
+      window.RadEdit.sendRtf({
+        target: "region",
+        region: regionName,
+        rtf: payload
+      });
+      return;
+    }
+    console.warn("RadEdit.sendRtf is not available.");
+  }
+
+  // =========================
+  // Mode (Dicter vs Dépistage)
+  // =========================
+  function isDictMode() {
+    return isChecked("ModeDicter");
+  }
+  function applyModeUI() {
+    const body = document.getElementById("mammoFormBody");
+    const dict = isDictMode();
+    if (body) body.style.display = dict ? "none" : "block";
+
+    // En mode Dicter: on envoie tout de suite [] dans les 2 régions
+    if (dict) {
+      sendToRegion("RENSEIGNEMENTS", "[]");
+      sendToRegionRtf("TEXTE", "");
+    }
+  }
+  function setupMode() {
+    const cbDep = document.getElementById("ModeDepistage");
+    const cbDic = document.getElementById("ModeDicter");
+    if (!cbDep || !cbDic) return;
+
+    // défaut: dépistage
+    cbDep.checked = true;
+    cbDic.checked = false;
+
+    const sync = (source) => {
+      if (source === cbDep && cbDep.checked) cbDic.checked = false;
+      if (source === cbDic && cbDic.checked) cbDep.checked = false;
+
+      // empêcher les 2 à false: si on décoche un, on garde l'autre
+      if (!cbDep.checked && !cbDic.checked) cbDep.checked = true;
+
+      applyModeUI();
+    };
+
+    cbDep.addEventListener("change", () => sync(cbDep));
+    cbDic.addEventListener("change", () => sync(cbDic));
+
+    applyModeUI();
+  }
+
+  // =========================
+  // Liens bidirectionnels
+  // =========================
+  let _syncing = false;
+
+  function updatePostOpVisibility() {
+    const atcdNeo = document.getElementById("ATCDneo");
+    const postOpRow = document.getElementById("postOpRow");
+    if (!atcdNeo || !postOpRow) return;
+    postOpRow.style.display = atcdNeo.checked ? "block" : "none";
+    if (!atcdNeo.checked) {
+      const postOp = document.getElementById("PostOp1");
+      if (postOp) postOp.checked = false;
+    }
+  }
+
+  function setupBidirectionalLinks() {
+    const cbTypeSuiviNeo = document.getElementById("TypeExam_SuiviNeo");
+    const cbATCDneo      = document.getElementById("ATCDneo");
+
+    const cbTypeSuiviHR  = document.getElementById("TypeExam_SuiviHR");
+    const cbSuiviHR      = document.getElementById("SuiviHR");
+    const txtSuiviHR     = document.getElementById("SuiviHR_Txt");
+
+    if (cbTypeSuiviNeo && cbATCDneo) {
+      cbATCDneo.addEventListener("change", () => {
+        if (_syncing) return;
+        _syncing = true;
+        cbTypeSuiviNeo.checked = cbATCDneo.checked;
+        _syncing = false;
+        updatePostOpVisibility();
+      });
+
+      cbTypeSuiviNeo.addEventListener("change", () => {
+        if (_syncing) return;
+        _syncing = true;
+        cbATCDneo.checked = cbTypeSuiviNeo.checked;
+        _syncing = false;
+        updatePostOpVisibility();
+      });
+    }
+
+    if (cbTypeSuiviHR && cbSuiviHR) {
+      const focusSuiviHR = () => {
+        if (txtSuiviHR) {
+          setTimeout(() => { txtSuiviHR.focus(); txtSuiviHR.select(); }, 0);
+        }
+      };
+
+      cbSuiviHR.addEventListener("change", () => {
+        if (_syncing) return;
+        _syncing = true;
+        cbTypeSuiviHR.checked = cbSuiviHR.checked;
+        _syncing = false;
+
+        if (cbSuiviHR.checked) {
+          focusSuiviHR();
+        } else {
+          if (txtSuiviHR) txtSuiviHR.value = "";
+        }
+      });
+
+      cbTypeSuiviHR.addEventListener("change", () => {
+        if (_syncing) return;
+        _syncing = true;
+        cbSuiviHR.checked = cbTypeSuiviHR.checked;
+        _syncing = false;
+
+        if (cbTypeSuiviHR.checked) {
+          focusSuiviHR();
+        } else {
+          if (txtSuiviHR) txtSuiviHR.value = "";
+        }
+      });
+    }
+  }
+
+  // =========================
+  // TypeExam: Autre (focus)
+  // =========================
+  function setupTypeExamAutre() {
+    const cb  = document.getElementById("TypeExam_Autre");
+    const txt = document.getElementById("TypeExam_AutreTxt");
+    if (!cb || !txt) return;
+
+    const sync = () => {
+      if (cb.checked) {
+        txt.style.display = "inline-block";
+        setTimeout(() => { txt.focus(); txt.select(); }, 0);
+      } else {
+        txt.style.display = "none";
+        txt.value = "";
+      }
+    };
+
+    cb.addEventListener("change", sync);
+    sync();
+  }
+
+  // =========================
+  // Lesion Autre autofocus + click textbox autocheck
+  // =========================
+  function setupLesionAutreAutoFocus() {
+    for (let i = 1; i <= 5; i++) {
+      const autreCb  = document.querySelector(`input[name="LesionType_${i}"][value="Autre"]`);
+      const autreTxt = document.getElementById(`LesionAutre_${i}`);
+      if (!autreCb || !autreTxt) continue;
+
+      autreCb.addEventListener("change", () => {
+        if (autreCb.checked) {
+          setTimeout(() => { autreTxt.focus(); autreTxt.select(); }, 0);
+        } else {
+          autreTxt.value = "";
+        }
+      });
+
+      autreTxt.addEventListener("focus", () => {
+        if (!autreCb.checked) autreCb.checked = true;
+      });
+    }
+  }
+
+  // =========================
+  // ExamSuppl Autre autofocus + click textbox autocheck
+  // =========================
+  function setupExamSupplAutreAutoFocus() {
+    const autreCb  = document.querySelector('input[name="ExamSuppl"][value="Autre"]');
+    const autreTxt = document.getElementById("ExamSuppl");
+    if (!autreCb || !autreTxt) return;
+
+    autreCb.addEventListener("change", () => {
+      if (autreCb.checked) {
+        setTimeout(() => { autreTxt.focus(); autreTxt.select(); }, 0);
+      } else {
+        autreTxt.value = "";
+      }
+    });
+
+    autreTxt.addEventListener("focus", () => {
+      if (!autreCb.checked) autreCb.checked = true;
+    });
+  }
+
+  // =========================
+  // Code6 textarea (show/hide + focus)
+  // =========================
+  function setupCode6() {
+    const c6Checkbox = document.getElementById("Code6");
+    const c6Wrapper  = document.getElementById("C6TextWrapper");
+    const c6Text     = document.getElementById("Code6Text");
+    if (!c6Checkbox || !c6Wrapper || !c6Text) return;
+
+    const sync = () => {
+      if (c6Checkbox.checked) {
+        c6Wrapper.style.display = "block";
+        setTimeout(() => { c6Text.focus(); c6Text.select(); }, 0);
+      } else {
+        c6Wrapper.style.display = "none";
+        c6Text.value = "";
+      }
+    };
+
+    c6Checkbox.addEventListener("change", sync);
+    sync();
+  }
+
+  // =========================
+  // Résultat: exclusivités + affichage sections
+  // =========================
+  function getResultFlags() {
+    const normal = document.getElementById("Res_Normal")?.checked || false;
+    const inch   = document.getElementById("Res_Inchange")?.checked || false;
+    const anorm  = document.getElementById("Res_Anormal")?.checked || false;
+    const benin  = document.getElementById("Res_NormalBenin")?.checked || false;
+    return { normal, inch, anorm, benin };
+  }
+
+  function onResultChange(chk) {
+    const normalEl = document.getElementById("Res_Normal");
+    const inchEl   = document.getElementById("Res_Inchange");
+    const anormEl  = document.getElementById("Res_Anormal");
+    const beninEl  = document.getElementById("Res_NormalBenin");
+
+    if (chk.id === "Res_Anormal" && chk.checked) {
+      if (normalEl) normalEl.checked = false;
+      if (inchEl)   inchEl.checked   = false;
+      if (beninEl)  beninEl.checked  = false;
+    } else if ((chk.id === "Res_Normal" || chk.id === "Res_NormalBenin") && chk.checked) {
+      if (anormEl) anormEl.checked = false;
+      if (chk.id === "Res_Normal" && beninEl)  beninEl.checked  = false;
+      if (chk.id === "Res_NormalBenin" && normalEl) normalEl.checked = false;
+    } else if (chk.id === "Res_Inchange" && chk.checked) {
+      if (anormEl && anormEl.checked) anormEl.checked = false;
+    }
+
+    updateInterpretationVisibility();
+  }
+
+  function updateInterpretationVisibility() {
+    const { normal, inch, anorm, benin } = getResultFlags();
+
+    const anormalSection     = document.getElementById("anormalSection");
+    const lesionsWrapper     = document.getElementById("lesionsWrapper");
+    const examensSuppSection = document.getElementById("examensSuppSection");
+    const notesSection       = document.getElementById("notesSection");
+    const suiviBlock         = document.getElementById("suiviOptionsBlock");
+
+    if (anormalSection)     anormalSection.style.display = "none";
+    if (lesionsWrapper)     lesionsWrapper.style.display = "none";
+    if (examensSuppSection) examensSuppSection.style.display = "none";
+    if (notesSection)       notesSection.style.display = "none";
+    if (suiviBlock)         suiviBlock.style.display = "none";
+
+    const anyResult = normal || inch || anorm || benin;
+    if (!anyResult) return;
+
+    if (anorm) {
+      if (anormalSection)     anormalSection.style.display = "block";
+      if (lesionsWrapper)     lesionsWrapper.style.display = "block";
+      if (examensSuppSection) examensSuppSection.style.display = "block";
+    } else {
+      if (suiviBlock)   suiviBlock.style.display = "block";
+      if (notesSection) notesSection.style.display = "block";
+    }
+  }
+
+  function setupResultListeners() {
+    ["Res_Normal","Res_Inchange","Res_Anormal","Res_NormalBenin"].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener("change", () => onResultChange(el));
+    });
+  }
+
+  // =========================
+  // Lesion blocks add/remove
+  // =========================
+  function setupLesionBlocks() {
+    const addBtn    = document.getElementById("addLesionBtn");
+    const removeBtn = document.getElementById("removeLesionBtn");
+    if (!addBtn || !removeBtn) return;
+
+    addBtn.addEventListener("click", function () {
+      const blocks = document.querySelectorAll(".lesion-block");
+      for (const block of blocks) {
+        if (block.style.display === "none") {
+          block.style.display = "block";
+          removeBtn.disabled = false;
+          const anyHidden = Array.from(blocks).some(b => b.style.display === "none");
+          if (!anyHidden) addBtn.disabled = true;
+          return;
+        }
+      }
+    });
+
+    removeBtn.addEventListener("click", function () {
+      const blocks = Array.from(document.querySelectorAll(".lesion-block"));
+      const visibleBlocks = blocks.filter(b => b.style.display !== "none");
+      if (visibleBlocks.length <= 1) return;
+      const last = visibleBlocks[visibleBlocks.length - 1];
+      last.style.display = "none";
+      addBtn.disabled = false;
+    });
+  }
+
+  // =========================
+  // Builders (lesions, sizes, exam suppl)
+  // =========================
+  function buildLesionTypes(index) {
+    const selector = 'input[name="LesionType_' + index + '"]:checked';
+    const boxes = document.querySelectorAll(selector);
+    if (!boxes.length) return "";
+
+    const parts = [];
+    boxes.forEach(cb => {
+      if (cb.value === "Autre") {
+        const otherInput = document.getElementById("LesionAutre_" + index);
+        const otherTxt = otherInput ? otherInput.value.trim() : "";
+        parts.push(otherTxt || "Autre");
+      } else {
+        parts.push(cb.value);
+      }
+    });
+    return parts.join(" / ");
+  }
+
+  function buildLocLesion(index) {
+    const ccSel = Array.from(document.querySelectorAll('input[name="LocCC_' + index + '"]:checked'))
+      .map(cb => cb.value.toLowerCase());
+    const mloSel = Array.from(document.querySelectorAll('input[name="LocMLO_' + index + '"]:checked'))
+      .map(cb => cb.value.toLowerCase());
+
+    const parts = [];
+    if (ccSel.length)  parts.push("CC " + ccSel.join(" et "));
+    if (mloSel.length) parts.push("MLO " + mloSel.join(" et "));
+    return parts.join(" / ");
+  }
+
+  function buildLesionSize(index) {
+    const input = document.getElementById("Taille_" + index);
+    if (!input) return "";
+    let raw = input.value.trim();
+    if (!raw) return "";
+
+    raw = raw.replace(",", ".").replace(" ", "");
+    const num = parseFloat(raw);
+    if (isNaN(num)) return raw;
+
+    const fixed = num.toFixed(1);
+    return fixed.replace(".", ",") + " cm";
+  }
+
+  function buildExamSuppl() {
+    const boxes = document.querySelectorAll('input[name="ExamSuppl"]:checked');
+    if (!boxes.length) return "";
+
+    const vals = [];
+    boxes.forEach(cb => {
+      if (cb.value === "Autre") {
+        const otherInput = document.getElementById("ExamSuppl");
+        const otherTxt = otherInput ? otherInput.value.trim() : "";
+        vals.push(otherTxt || "Autre");
+      } else {
+        vals.push(cb.value);
+      }
+    });
+
+    return vals.join(" / ");
+  }
+
+  // =========================
+  // Rapport TEXTE: texte propre (pas de RTF)
+  // =========================
+  function buildMammoTextePlain(vars) {
+    const lines = [];
+
+    const addIf = (key) => {
+      const v = (vars[key] || "").trim();
+      if (v) lines.push(v);
+    };
+
+    // Infos de base
+    addIf("Mammo#1");
+    addIf("Tomo");
+    addIf("AspectPar");
+    addIf("Protheses");
+    addIf("ATCDfam");
+    addIf("SuiviHR");
+    addIf("ATCDneo");
+
+    if ((vars["PostOp1"] || "") === "Oui") {
+      lines.push("Première mammographie post chirurgie");
+    }
+
+    const result = (vars["Result"] || "").trim();
+
+    // NON anormal
+    if (result && result !== "Anormal") {
+      if (lines.length) lines.push("");
+
+      if (result === "Normal" && (vars["PostOp1"] || "") === "Oui") {
+        lines.push("RÉSULTAT: Normal pour une première mammographie post-chirurgie.");
+      } else {
+        lines.push("RÉSULTAT: " + result);
+      }
+
+      const suivi = (vars["SuiviResult"] || "").trim();
+      if (suivi) {
+        lines.push("");
+        lines.push("RECOMMANDATION: " + suivi);
+      }
+
+      let hasExtra = false;
+      for (const k of ["CS", "C2", "C3", "C4", "C6"]) {
+        const v = (vars[k] || "").trim();
+        if (!v) continue;
+
+        if (!hasExtra) {
+          lines.push("");
+          lines.push("REMARQUES SUPPLÉMENTAIRES:");
+          hasExtra = true;
+        }
+        lines.push("");
+        lines.push(v);
+      }
+
+      while (lines.length && lines[0].trim() === "") lines.shift();
+      while (lines.length && lines[lines.length - 1].trim() === "") lines.pop();
+
+      return lines.length ? lines.join("\r\n") : "[]";
+    }
+
+    // Anormal
+    if (result === "Anormal") {
+      if (lines.length) lines.push("");
+
+      const patterns = [];
+      for (const k of ["LesionUniD","LesionUniG","LesionMultiD","LesionMultiG","LesionDiffusD","LesionDiffusG"]) {
+        const v = (vars[k] || "").trim();
+        if (v) patterns.push(v);
+      }
+
+      if (patterns.length) lines.push("RÉSULTAT: Anormal: " + patterns.join(" et "));
+      else                 lines.push("RÉSULTAT: Anormal.");
+
+      for (let i = 1; i <= 5; i++) {
+        const lat    = (vars["LatLesion" + i] || "").trim();
+        const lesion = (vars["Lesion" + i] || "").trim();
+        const loc    = (vars["LocLesion" + i] || "").trim();
+        const taille = (vars["TailleLesion" + i] || "").trim();
+
+        if (!lat && !lesion && !loc && !taille) continue;
+
+        let desc = "";
+        if (lat)   desc += lat + ": ";
+        if (lesion) desc += lesion;
+        if (loc)    desc += (desc ? " en " : "") + loc;
+        if (taille) desc += (desc ? " de " : "") + taille;
+        if (!desc) continue;
+
+        lines.push("");
+        lines.push("    " + i + ". " + desc);
+      }
+
+      const examSuppl = (vars["ExamSuppl"] || "").trim();
+      if (examSuppl) {
+        lines.push("");
+        lines.push("Patiente sera rappelée pour des examens complémentaires: " + examSuppl);
+      }
+
+      while (lines.length && lines[0].trim() === "") lines.shift();
+      while (lines.length && lines[lines.length - 1].trim() === "") lines.pop();
+
+      return lines.length ? lines.join("\r\n") : "[]";
+    }
+
+    // fallback
+    while (lines.length && lines[0].trim() === "") lines.shift();
+    while (lines.length && lines[lines.length - 1].trim() === "") lines.pop();
+    return lines.length ? lines.join("\r\n") : "[]";
+  }
+
+  function formatMammoTextToRtf(text) {
+    const raw = (text || "").toString();
+    if (!raw || raw.trim() === "" || raw.trim() === "[]") {
+      return escapeRtfText("[]");
+    }
+
+    const lines = raw.split(/\r\n|\n/);
+    const out = [];
+    for (const line of lines) {
+      if (line.trim() === "") {
+        out.push("\\par ");
+        continue;
+      }
+
+      const upper = line.toUpperCase();
+      const colonIndex = line.indexOf(":");
+      if (colonIndex > 0) {
+        const label = line.slice(0, colonIndex + 1);
+        const rest = line.slice(colonIndex + 1).trimStart();
+
+        if (upper.includes("SULTAT:")) {
+          if (rest) {
+            out.push("\\b " + escapeRtfText(label) + "\\b0  " + escapeRtfText(rest) + "\\par ");
+          } else {
+            out.push("\\b " + escapeRtfText(label) + "\\b0\\par ");
+          }
+          continue;
+        }
+        if (upper.includes("RECOMMANDATION:")) {
+          if (rest) {
+            out.push("\\ul " + escapeRtfText(label) + "\\ul0  " + escapeRtfText(rest) + "\\par ");
+          } else {
+            out.push("\\ul " + escapeRtfText(label) + "\\ul0\\par ");
+          }
+          continue;
+        }
+        if (upper.includes("REMARQUES")) {
+          if (rest) {
+            out.push("\\i " + escapeRtfText(label) + "\\i0  " + escapeRtfText(rest) + "\\par ");
+          } else {
+            out.push("\\i " + escapeRtfText(label) + "\\i0\\par ");
+          }
+          continue;
+        }
+      }
+
+      if (line.startsWith("    ")) {
+        out.push("\\tab " + escapeRtfText(line.trimStart()) + "\\par ");
+      } else {
+        out.push(escapeRtfText(line) + "\\par ");
+      }
+    }
+
+    return out.join("");
+  }
+
+  // =========================
+  // Génération + validations
+  // =========================
+  function generateReport() {
+    // Mode Dicter => on envoie [] aux 2 régions (et on sort)
+    if (isDictMode()) {
+      sendToRegion("RENSEIGNEMENTS", "[]");
+      sendToRegionRtf("TEXTE", "");
+      return;
+    }
+
+    const vars = {};
+
+    // Infos patient (gardées au besoin, mais proc non inséré au rapport)
+    vars["PatName"]  = getInputValue("PatName");
+    vars["NumDos"]   = getInputValue("NumDos");
+    vars["RebNb"]    = getInputValue("RebNb");
+    vars["proc"]     = getInputValue("proc");
+    vars["DateExam"] = getInputValue("DateExam");
+
+    // Type d'examen (RENSEIGNEMENTS)
+    const typeBoxes = Array.from(document.querySelectorAll('input[name="TypeExam"]:checked'));
+    if (typeBoxes.length === 0) {
+      alert("Veuillez choisir au moins un type d'examen.");
+      return;
+    }
+
+    const autreChecked = typeBoxes.some(cb => cb.value === "Autre");
+    if (autreChecked) {
+      const otherTxt = getInputValue("TypeExam_AutreTxt");
+      if (!otherTxt) {
+        alert("Veuillez préciser le type d'examen pour 'Autre'.");
+        return;
+      }
+    }
+
+    const typeChoices = typeBoxes.map(cb => {
+      if (cb.value === "Autre") {
+        const otherTxt = getInputValue("TypeExam_AutreTxt");
+        return otherTxt || "Autre";
+      }
+      return cb.value;
+    });
+    vars["TypeExam"] = typeChoices.join(" / ");
+
+    // Aspect
+    const aspect = getRadioValue("AspectPar");
+    if (!aspect) {
+      alert("Veuillez spécifier l'aspect parenchymateux.");
+      return;
+    }
+    vars["AspectPar"] = aspect;
+
+    // Prothèses / Tomo / 1ère mammo / ATCD
+    vars["Protheses"] = isChecked("Protheses") ? "Patiente porteuse de prothèses mammaires" : "";
+    vars["Tomo"]      = isChecked("Tomo")      ? "Tomosynthèse effectuée" : "";
+    vars["Mammo#1"]   = isChecked("Mammo1")    ? "Première mammographie chez cette patiente" : "";
+    vars["ATCDfam"]   = isChecked("ATCDfam")   ? "Antécédents familiaux positifs" : "";
+
+    if (isChecked("SuiviHR")) {
+      const suiviTxt = getInputValue("SuiviHR_Txt");
+      vars["SuiviHR"] = suiviTxt ? ("Suivi de lésion haut risque: " + suiviTxt) : "Suivi de lésion haut risque";
+    } else {
+      vars["SuiviHR"] = "";
+    }
+
+    vars["ATCDneo"] = isChecked("ATCDneo") ? "Antécédent de néoplasie du sein opérée" : "";
+    vars["PostOp1"] = (isChecked("ATCDneo") && isChecked("PostOp1")) ? "Oui" : "";
+
+    // Résultat
+    const normal = isChecked("Res_Normal");
+    const inch   = isChecked("Res_Inchange");
+    const anorm  = isChecked("Res_Anormal");
+    const benin  = isChecked("Res_NormalBenin");
+
+    if (!normal && !inch && !anorm && !benin) {
+      alert("Veuillez choisir un résultat d'interprétation.");
+      return;
+    }
+
+    // Règle spéciale post-op
+    if (isChecked("PostOp1")) {
+      const normalSeul  = normal && !inch && !anorm && !benin;
+      const anormalSeul = anorm  && !normal && !inch && !benin;
+      if (!normalSeul && !anormalSeul) {
+        alert("Si '1er post-op' est coché, le résultat doit être 'Normal' ou 'Anormal' uniquement.");
+        return;
+      }
+    }
+
+    let resultText = "";
+    if (anorm) {
+      resultText = "Anormal";
+    } else if (normal && inch && !benin) {
+      resultText = "Normal, inchangé avec l'examen antérieur";
+    } else if (benin && inch && !normal) {
+      resultText = "Normal, lésion bénigne, inchangé avec l'examen antérieur";
+    } else if (inch && !normal && !benin) {
+      resultText = "Inchangé avec l'examen antérieur";
+    } else if (normal && !inch && !benin) {
+      resultText = "Normal";
+    } else if (benin && !inch && !normal) {
+      resultText = "Normal, lésion bénigne";
+    } else {
+      const tmp = [];
+      if (normal) tmp.push("Normal");
+      if (benin)  tmp.push("Normal, lésion bénigne");
+      if (inch)   tmp.push("inchangé avec l'examen antérieur");
+      resultText = tmp.join(", ");
+    }
+    vars["Result"] = resultText;
+
+    // Suivi
+    let suiviPhrase = "";
+    if (!anorm) {
+      const rv = document.querySelector('input[name="SuiviResult"]:checked');
+      if (rv) {
+        const delay = rv.value.replace(/^Revoir\s+/i, "");
+        suiviPhrase = "Prochaine mammographie recommandée dans " + delay;
+      }
+    }
+    vars["SuiviResult"] = suiviPhrase;
+
+    // Anormal: référence + lésions + examens suppl.
+    if (anorm) {
+      const refD = getRadioValue("RefDroit");
+      const refG = getRadioValue("RefGauche");
+
+      vars["LesionUniD"]    = (refD === "Lesion unique")     ? "Lésion unique sein droit" : "";
+      vars["LesionMultiD"]  = (refD === "Lesions multiples") ? "Lésion multiple sein droit" : "";
+      vars["LesionDiffusD"] = (refD === "Lesion diffuse")    ? "Lésion diffuse sein droit" : "";
+
+      vars["LesionUniG"]    = (refG === "Lesion unique")     ? "Lésion unique sein gauche" : "";
+      vars["LesionMultiG"]  = (refG === "Lesions multiples") ? "Lésion multiple sein gauche" : "";
+      vars["LesionDiffusG"] = (refG === "Lesion diffuse")    ? "Lésion diffuse sein gauche" : "";
+
+      let anyLesionVisible = false;
+
+      for (let i = 1; i <= 5; i++) {
+        const block = document.getElementById("lesionBlock" + i);
+        if (!block) continue;
+        const visible = block.style.display !== "none";
+
+        const keyType   = "Lesion" + i;
+        const keyLat    = "LatLesion" + i;
+        const keyLoc    = "LocLesion" + i;
+        const keyTaille = "TailleLesion" + i;
+
+        if (!visible) {
+          vars[keyType] = vars[keyLat] = vars[keyLoc] = vars[keyTaille] = "";
+          continue;
+        }
+
+        anyLesionVisible = true;
+
+        const typeCount = document.querySelectorAll('input[name="LesionType_' + i + '"]:checked').length;
+        const sideVal   = getRadioValue("LocSide_" + i);
+        const ccCount   = document.querySelectorAll('input[name="LocCC_' + i + '"]:checked').length;
+        const mloCount  = document.querySelectorAll('input[name="LocMLO_' + i + '"]:checked').length;
+
+        if (!typeCount) { alert("Pour la lésion " + i + ", le type de lésion est obligatoire."); return; }
+        if (!sideVal)   { alert("Pour la lésion " + i + ", le côté (sein droit/gauche) est obligatoire."); return; }
+        if (!ccCount)   { alert("Pour la lésion " + i + ", au moins un choix CC est obligatoire."); return; }
+        if (!mloCount)  { alert("Pour la lésion " + i + ", au moins un choix MLO est obligatoire."); return; }
+
+        const autreCb = document.querySelector('input[name="LesionType_' + i + '"][value="Autre"]:checked');
+        if (autreCb) {
+          const otherTxt = getInputValue("LesionAutre_" + i);
+          if (!otherTxt) {
+            alert("Pour la lésion " + i + ", le texte doit être précisé pour le type 'Autre'.");
+            return;
+          }
+        }
+
+        const typeVal   = buildLesionTypes(i);
+        const locVal    = buildLocLesion(i);
+        const tailleVal = buildLesionSize(i);
+
+        let latLabel = "";
+        if (sideVal === "Droit")  latLabel = "Sein droit";
+        if (sideVal === "Gauche") latLabel = "Sein gauche";
+
+        vars[keyType]   = typeVal;
+        vars[keyLat]    = latLabel;
+        vars[keyLoc]    = locVal;
+        vars[keyTaille] = tailleVal;
+      }
+
+      if (!anyLesionVisible) {
+        alert("Au moins un bloc Lésion doit être rempli pour un résultat anormal.");
+        return;
+      }
+
+      const examSupplVal = buildExamSuppl();
+      if (!examSupplVal) {
+        alert("Pour un résultat anormal, au moins un examen supplémentaire doit être sélectionné.");
+        return;
+      }
+      vars["ExamSuppl"] = examSupplVal;
+
+    } else {
+      // vider anormal
+      vars["LesionUniD"] = vars["LesionMultiD"] = vars["LesionDiffusD"] = "";
+      vars["LesionUniG"] = vars["LesionMultiG"] = vars["LesionDiffusG"] = "";
+      for (let i = 1; i <= 5; i++) {
+        vars["Lesion" + i] = vars["LatLesion" + i] = vars["LocLesion" + i] = vars["TailleLesion" + i] = "";
+      }
+      vars["ExamSuppl"] = "";
+    }
+
+    // Notes complémentaires (non anormal)
+    if (!anorm) {
+      vars["CS"] = isChecked("CodeS")
+        ? 'Votre patiente a répondu "OUI" à la question "Avez-vous des problèmes aux seins qui sont apparus ou qui ont augmenté depuis deux ans?" sur le questionnaire pré-mammographie. Une évaluation clinique est recommandée pour compléter et décider si une investigation supplémentaire est nécessaire. Au besoin, svp vous référer au questionnaire.'
+        : "";
+
+      vars["C2"] = isChecked("Code2")
+        ? "Prochaine mammographie de dépistage recommandée dans 1 an : microcalcifications d’allure bénigne (BI-RADS 3)."
+        : "";
+
+      vars["C3"] = isChecked("Code3")
+        ? "Prochaine mammographie de dépistage recommandée dans 1 an : microcalcifications d’allure bénigne, connues (BI-RADS 3)."
+        : "";
+
+      vars["C4"] = isChecked("Code4")
+        ? "Prochaine mammographie de dépistage recommandée dans 1 an : lésion d’allure bénigne (BI-RADS 3)."
+        : "";
+
+      if (isChecked("Code6")) {
+        const c6Text = getInputValue("Code6Text");
+        vars["C6"] = c6Text !== "" ? c6Text : "";
+      } else {
+        vars["C6"] = "";
+      }
+    } else {
+      vars["CS"] = vars["C2"] = vars["C3"] = vars["C4"] = vars["C6"] = "";
+    }
+
+    // =========================
+    // ENVOI AUX DATA-REGIONS
+    // =========================
+    const rens  = (vars["TypeExam"] || "").trim() || "[]";     // seul
+    const texte = buildMammoTextePlain(vars);                  // le reste
+    const texteRtf = formatMammoTextToRtf(texte);
+
+    sendToRegion("RENSEIGNEMENTS", rens);
+    sendToRegionRtf("TEXTE", texteRtf);
+  }
+
+  // =========================
+  // Init DOM
+  // =========================
+  document.addEventListener("DOMContentLoaded", function () {
+    setupMode();
+
+    setupTypeExamAutre();
+    setupLesionAutreAutoFocus();
+    setupExamSupplAutreAutoFocus();
+    setupLesionBlocks();
+    setupCode6();
+
+    setupBidirectionalLinks();
+    updatePostOpVisibility();
+
+    setupResultListeners();
+    updateInterpretationVisibility();
+  });
+</script>
+
+</body>
+</html>
