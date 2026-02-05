@@ -2095,26 +2095,36 @@ namespace RadEdit
                 return;
             }
 
+            bool routed = false;
             try
             {
-                await SendTextToHtmlAsync(inserted);
+                routed = await SendTextToHtmlAsync(inserted);
             }
             catch
             {
                 // Swallow to avoid disrupting the UI if the WebView is not ready.
             }
 
-            suppressRtfEvents = true;
-            try
+            if (routed)
             {
-                if (!string.Equals(richTextBox1.Rtf, lastRtfSnapshot, StringComparison.Ordinal))
+                suppressRtfEvents = true;
+                try
                 {
-                    richTextBox1.Rtf = lastRtfSnapshot;
+                    if (!string.Equals(richTextBox1.Rtf, lastRtfSnapshot, StringComparison.Ordinal))
+                    {
+                        richTextBox1.Rtf = lastRtfSnapshot;
+                    }
+                }
+                finally
+                {
+                    suppressRtfEvents = false;
                 }
             }
-            finally
+            else
             {
-                suppressRtfEvents = false;
+                lastPlainText = newText;
+                lastRtfSnapshot = richTextBox1.Rtf ?? string.Empty;
+                ScheduleLanguageToolCheck(newText);
             }
         }
 
@@ -2154,17 +2164,17 @@ namespace RadEdit
             return newText.Substring(prefix, insertedLength);
         }
 
-        private async Task SendTextToHtmlAsync(string text)
+        private async Task<bool> SendTextToHtmlAsync(string text)
         {
             if (string.IsNullOrEmpty(text) || !IsHtmlMirroringAvailable())
             {
-                return;
+                return false;
             }
 
             await EnsureWebView2InitializedAsync();
             if (webView2.CoreWebView2 == null)
             {
-                return;
+                return false;
             }
 
             await htmlInsertGate.WaitAsync();
@@ -2174,10 +2184,10 @@ namespace RadEdit
                 string script = $@"(() => {{
     const text = {textJson};
     const el = document.activeElement;
-    if (!el) return;
+    if (!el) return false;
     if (el.isContentEditable) {{
         const sel = window.getSelection();
-        if (!sel || sel.rangeCount === 0) return;
+        if (!sel || sel.rangeCount === 0) return false;
         sel.deleteFromDocument();
         const range = sel.getRangeAt(0);
         range.insertNode(document.createTextNode(text));
@@ -2185,14 +2195,14 @@ namespace RadEdit
         sel.removeAllRanges();
         sel.addRange(range);
         el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-        return;
+        return true;
     }}
     const tag = (el.tagName || '').toLowerCase();
-    if (tag !== 'input' && tag !== 'textarea') return;
+    if (tag !== 'input' && tag !== 'textarea') return false;
     if (tag === 'input') {{
         const type = (el.getAttribute('type') || 'text').toLowerCase();
         const allowed = new Set(['text','search','email','url','tel','password','number','date','datetime-local','month','time','week']);
-        if (!allowed.has(type)) return;
+        if (!allowed.has(type)) return false;
     }}
     const start = typeof el.selectionStart === 'number' ? el.selectionStart : el.value.length;
     const end = typeof el.selectionEnd === 'number' ? el.selectionEnd : el.value.length;
@@ -2201,9 +2211,24 @@ namespace RadEdit
     const pos = start + text.length;
     if (el.setSelectionRange) el.setSelectionRange(pos, pos);
     el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+    return true;
 }})();";
 
-                await webView2.ExecuteScriptAsync(script);
+                string? result = await webView2.ExecuteScriptAsync(script);
+                if (string.IsNullOrWhiteSpace(result))
+                {
+                    return false;
+                }
+
+                try
+                {
+                    return JsonSerializer.Deserialize<bool>(result);
+                }
+                catch
+                {
+                    string trimmed = result.Trim().Trim('"');
+                    return string.Equals(trimmed, "true", StringComparison.OrdinalIgnoreCase);
+                }
             }
             finally
             {
