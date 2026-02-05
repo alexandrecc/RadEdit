@@ -181,6 +181,37 @@ Then add `data-target-region` in the HTML. When the field changes, RadEdit repla
 
 Checkboxes can use `data-map` with `true`/`false` keys. A working demo lives in `examples\html-routing-demo.html`, `examples\html-routing-demo.rtf`, and `examples\html-routing-demo.ahk`.
 
+## WebView RTF Commands
+
+HTML pages loaded in RadEdit can also send RTF directly via WebView2 messaging. A unified JavaScript helper is injected as `window.RadEdit.sendRtf`:
+
+```html
+<script>
+  // Insert formatted RTF into a named region (RTF fragment, no {\rtf} header)
+  window.RadEdit.sendRtf({
+    target: "region",
+    region: "TEXTE",
+    rtf: "{\\b Resultat:}\\b0 Normal\\par"
+  });
+
+  // Insert at the caret (RTF fragment or full {\rtf} document)
+  window.RadEdit.sendRtf({
+    target: "caret",
+    rtf: "{\\i Impression:}\\i0 Tout est normal\\par"
+  });
+
+  // Insert at the end (RTF fragment or full {\rtf} document)
+  window.RadEdit.sendRtf({
+    target: "end",
+    rtf: "{\\ul Recommandation:}\\ul0 Revoir dans 1 an\\par"
+  });
+</script>
+```
+
+Notes:
+- `target: "region"` requires `region` and expects an RTF fragment (no `{\rtf...}` header).
+- `target: "caret"` / `target: "end"` accept fragments or full RTF documents.
+
 ## HTML Caching
 
 Local HTML files loaded through `SetHtmlFile` are served with `no-store` cache headers so edits are picked up immediately. Remote URLs keep the default WebView2 cache behavior.
@@ -191,6 +222,16 @@ Local HTML files loaded through `SetHtmlFile` are served with `no-store` cache h
 
 - `examples\webview-popup-test.html`
 - `examples\webview-popup-child.html`
+
+## WM_COPYDATA + Popup Repro
+
+If WM_COPYDATA responses stop after a child WebView2 is opened from the HTML view, use this repro bundle:
+
+- `examples\webview-copydata-repro.html`
+- `examples\webview-copydata-child.html`
+- `examples\webview-copydata-repro.ahk`
+
+Run RadEdit, then launch the AHK script. It loads the HTML view, runs a baseline `RequestTempFile`, prompts you to open the popup, and runs the same request again. Results are shown in message boxes and logged to `examples\webview-copydata-repro.log`.
 
 ## HTML View Metadata
 

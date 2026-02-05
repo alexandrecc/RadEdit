@@ -46,6 +46,7 @@ namespace RadEdit
 
         private const int WM_COPYDATA = 0x004A;
         private const string HtmlRegionMessageType = "regionUpdate";
+        private const string HtmlRtfMessageType = "rtfUpdate";
         private const string DataContextMessageType = "dataContextUpdate";
         private const string DataContextModeKey = "__mode";
         private const string DataContextReplaceMode = "replace";
@@ -67,6 +68,36 @@ namespace RadEdit
             window.chrome.webview.postMessage(payload);
         }
     };
+
+    const normalizeRtfPayload = (value) => {
+        if (value === null || value === undefined) return '';
+        if (typeof value === 'string') return value;
+        try {
+            return JSON.stringify(value);
+        } catch (err) {
+            return String(value);
+        }
+    };
+
+    const sendRtfCommand = (options) => {
+        const opts = options && typeof options === 'object' ? options : {};
+        const target = (opts.target || opts.mode || 'region').toString().toLowerCase();
+        const region = opts.region ? String(opts.region) : '';
+        const rtf = normalizeRtfPayload(opts.rtf);
+        send({
+            type: 'rtfUpdate',
+            target: target,
+            region: region,
+            rtf: rtf
+        });
+    };
+
+    if (!window.RadEdit) {
+        window.RadEdit = {};
+    }
+    if (!window.RadEdit.sendRtf) {
+        window.RadEdit.sendRtf = sendRtfCommand;
+    }
 
     const parseMap = (el) => {
         if (!el) return null;
@@ -305,6 +336,14 @@ namespace RadEdit
             public string? Field { get; set; }
             public string? Value { get; set; }
             public string? Text { get; set; }
+        }
+
+        private sealed class HtmlRtfUpdate
+        {
+            public string? Type { get; set; }
+            public string? Target { get; set; }
+            public string? Region { get; set; }
+            public string? Rtf { get; set; }
         }
 
         private sealed class LanguageToolIssue
@@ -1083,10 +1122,16 @@ namespace RadEdit
         private void WebView2_WebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
         {
             LogDebug("Web message received: " + e.WebMessageAsJson);
-            HtmlRegionUpdate? message;
+            string? messageType;
             try
             {
-                message = JsonSerializer.Deserialize<HtmlRegionUpdate>(e.WebMessageAsJson, HtmlMessageJsonOptions);
+                using var doc = JsonDocument.Parse(e.WebMessageAsJson);
+                if (!doc.RootElement.TryGetProperty("type", out var typeProp))
+                {
+                    LogDebug("Web message missing type.");
+                    return;
+                }
+                messageType = typeProp.GetString();
             }
             catch (JsonException)
             {
@@ -1094,29 +1139,181 @@ namespace RadEdit
                 return;
             }
 
-            if (message == null ||
-                !string.Equals(message.Type, HtmlRegionMessageType, StringComparison.OrdinalIgnoreCase))
+            if (string.IsNullOrWhiteSpace(messageType))
             {
-                LogDebug("Web message ignored. Type=" + (message?.Type ?? "<null>"));
+                LogDebug("Web message missing type.");
                 return;
             }
 
-            string region = message.Region?.Trim() ?? string.Empty;
-            if (string.IsNullOrEmpty(region))
+            if (string.Equals(messageType, HtmlRegionMessageType, StringComparison.OrdinalIgnoreCase))
             {
-                LogDebug("Web message missing region.");
+                HtmlRegionUpdate? message;
+                try
+                {
+                    message = JsonSerializer.Deserialize<HtmlRegionUpdate>(e.WebMessageAsJson, HtmlMessageJsonOptions);
+                }
+                catch (JsonException)
+                {
+                    LogDebug("Web message JSON failed to parse.");
+                    return;
+                }
+
+                if (message == null)
+                {
+                    LogDebug("Web message ignored. Type=<null>");
+                    return;
+                }
+
+                string region = message.Region?.Trim() ?? string.Empty;
+                if (string.IsNullOrEmpty(region))
+                {
+                    LogDebug("Web message missing region.");
+                    return;
+                }
+
+                string text = message.Text ?? string.Empty;
+                LogDebug("Routing update. Region=" + region + " TextLength=" + text.Length);
+                if (InvokeRequired)
+                {
+                    BeginInvoke(new Action(() => TryUpdateRtfRegion(region, text)));
+                    return;
+                }
+
+                TryUpdateRtfRegion(region, text);
                 return;
             }
 
-            string text = message.Text ?? string.Empty;
-            LogDebug("Routing update. Region=" + region + " TextLength=" + text.Length);
-            if (InvokeRequired)
+            if (string.Equals(messageType, HtmlRtfMessageType, StringComparison.OrdinalIgnoreCase))
             {
-                BeginInvoke(new Action(() => TryUpdateRtfRegion(region, text)));
+                HtmlRtfUpdate? message;
+                try
+                {
+                    message = JsonSerializer.Deserialize<HtmlRtfUpdate>(e.WebMessageAsJson, HtmlMessageJsonOptions);
+                }
+                catch (JsonException)
+                {
+                    LogDebug("Web message JSON failed to parse.");
+                    return;
+                }
+
+                if (message == null)
+                {
+                    LogDebug("Web message ignored. Type=<null>");
+                    return;
+                }
+
+                if (InvokeRequired)
+                {
+                    BeginInvoke(new Action(() => HandleRtfUpdate(message)));
+                    return;
+                }
+
+                HandleRtfUpdate(message);
                 return;
             }
 
-            TryUpdateRtfRegion(region, text);
+            LogDebug("Web message ignored. Type=" + messageType);
+        }
+
+        private void HandleRtfUpdate(HtmlRtfUpdate message)
+        {
+            if (message == null)
+            {
+                LogDebug("RTF update skipped: null message.");
+                return;
+            }
+
+            string target = (message.Target ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(target))
+            {
+                target = "region";
+            }
+
+            string rtf = message.Rtf ?? string.Empty;
+            LogDebug("RTF update. Target=" + target + " RtfLength=" + rtf.Length);
+
+            switch (target.ToLowerInvariant())
+            {
+                case "region":
+                {
+                    string region = message.Region?.Trim() ?? string.Empty;
+                    if (string.IsNullOrEmpty(region))
+                    {
+                        LogDebug("RTF update missing region.");
+                        return;
+                    }
+
+                    string? fragment = NormalizeRtfFragmentForRegion(rtf);
+                    if (fragment == null)
+                    {
+                        LogDebug("RTF update rejected: full RTF documents are not allowed for region updates.");
+                        return;
+                    }
+
+                    TryUpdateRtfRegionRaw(region, fragment);
+                    return;
+                }
+                case "caret":
+                {
+                    string normalized = NormalizeRtfForInsert(rtf);
+                    if (string.IsNullOrEmpty(normalized))
+                    {
+                        LogDebug("RTF update skipped: empty caret payload.");
+                        return;
+                    }
+
+                    TryInsertRtf(normalized);
+                    return;
+                }
+                case "end":
+                {
+                    string normalized = NormalizeRtfForInsert(rtf);
+                    if (string.IsNullOrEmpty(normalized))
+                    {
+                        LogDebug("RTF update skipped: empty end payload.");
+                        return;
+                    }
+
+                    TryGotoEnd();
+                    TryInsertRtf(normalized);
+                    return;
+                }
+                default:
+                    LogDebug("RTF update ignored. Unknown target=" + target);
+                    return;
+            }
+        }
+
+        private static string? NormalizeRtfFragmentForRegion(string? rtf)
+        {
+            if (string.IsNullOrWhiteSpace(rtf))
+            {
+                return string.Empty;
+            }
+
+            string trimmed = rtf.Trim();
+            if (trimmed.StartsWith(@"{\rtf", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            return trimmed;
+        }
+
+        private static string NormalizeRtfForInsert(string? rtf)
+        {
+            if (string.IsNullOrWhiteSpace(rtf))
+            {
+                return string.Empty;
+            }
+
+            string trimmed = rtf.Trim();
+            if (trimmed.StartsWith(@"{\rtf", StringComparison.OrdinalIgnoreCase))
+            {
+                return trimmed;
+            }
+
+            return "{\\rtf1\\ansi " + trimmed + "}";
         }
 
         private async void WebView2_NewWindowRequested(object? sender, CoreWebView2NewWindowRequestedEventArgs e)
@@ -3507,7 +3704,7 @@ namespace RadEdit
                 return false;
             }
 
-            if (TryUpdateRegionByInlineRtf(regionName, replacementText))
+            if (TryUpdateRegionByInlineRtf(regionName, replacementText, false))
             {
                 return true;
             }
@@ -3579,7 +3776,82 @@ namespace RadEdit
             return true;
         }
 
-        private bool TryUpdateRegionByInlineRtf(string regionName, string? replacementText)
+        private bool TryUpdateRtfRegionRaw(string regionName, string replacementRtf)
+        {
+            if (string.IsNullOrWhiteSpace(regionName))
+            {
+                LogDebug("TryUpdateRtfRegionRaw skipped: empty region.");
+                return false;
+            }
+
+            if (TryUpdateRegionByInlineRtf(regionName, replacementRtf, true))
+            {
+                return true;
+            }
+
+            string rtf = richTextBox1.Rtf ?? string.Empty;
+            string trimmedRegion = regionName.Trim();
+            string beginMarker = "@@BEGIN:" + trimmedRegion + "@@";
+            string endMarker = "@@END:" + trimmedRegion + "@@";
+            string replacement = replacementRtf ?? string.Empty;
+
+            int searchIndex = 0;
+            bool replacedAny = false;
+            var builder = new StringBuilder(rtf.Length + replacement.Length);
+
+            while (true)
+            {
+                int beginMarkerIndex = rtf.IndexOf(beginMarker, searchIndex, StringComparison.Ordinal);
+                if (beginMarkerIndex < 0)
+                {
+                    break;
+                }
+
+                int endMarkerIndex = rtf.IndexOf(endMarker, beginMarkerIndex + beginMarker.Length, StringComparison.Ordinal);
+                if (endMarkerIndex < 0)
+                {
+                    break;
+                }
+
+                if (!TryFindGroupBounds(rtf, beginMarkerIndex, out int beginGroupStart, out int beginGroupEnd) ||
+                    !TryFindGroupBounds(rtf, endMarkerIndex, out int endGroupStart, out int endGroupEnd))
+                {
+                    LogDebug("Failed to resolve group bounds for region: " + trimmedRegion);
+                    break;
+                }
+
+                int replaceStart = beginGroupEnd + 1;
+                int replaceEnd = endGroupStart;
+                if (replaceStart > replaceEnd)
+                {
+                    LogDebug("Invalid region span for: " + trimmedRegion);
+                    break;
+                }
+
+                builder.Append(rtf, searchIndex, replaceStart - searchIndex);
+                builder.Append(replacement);
+                searchIndex = replaceEnd;
+                replacedAny = true;
+            }
+
+            if (!replacedAny)
+            {
+                bool beginExists = rtf.IndexOf(beginMarker, StringComparison.Ordinal) >= 0;
+                bool endExists = rtf.IndexOf(endMarker, StringComparison.Ordinal) >= 0;
+                LogDebug("Region markers not found for: " + trimmedRegion +
+                         " Begin=" + beginExists + " End=" + endExists);
+                return false;
+            }
+
+            builder.Append(rtf, searchIndex, rtf.Length - searchIndex);
+            string updatedRtf = builder.ToString();
+
+            RunProgrammaticRtfUpdate(() => richTextBox1.Rtf = updatedRtf);
+            LogDebug("Region updated (rtf): " + trimmedRegion);
+            return true;
+        }
+
+        private bool TryUpdateRegionByInlineRtf(string regionName, string? replacementText, bool raw)
         {
             string trimmedRegion = regionName.Trim();
             string beginMarker = "@@BEGIN:" + trimmedRegion + "@@";
@@ -3600,7 +3872,9 @@ namespace RadEdit
                 return false;
             }
 
-            string replacementRtf = EscapeRtfText(replacementText ?? string.Empty);
+            string replacementRtf = raw
+                ? (replacementText ?? string.Empty)
+                : EscapeRtfText(replacementText ?? string.Empty);
             int v0Index = rtf.IndexOf(@"\v0", beginIndex + beginMarker.Length, StringComparison.Ordinal);
             int hiddenOnIndex = FindHiddenOnControlWordStart(rtf, endIndex);
 
