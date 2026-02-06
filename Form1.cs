@@ -61,6 +61,11 @@ namespace RadEdit
             "radedit:datacontext",
             "radedit:data"
         };
+        private static readonly string[] HtmlSnippetMetaNames =
+        {
+            "radedit:snippets",
+            "radedit:hotkeys"
+        };
         private static readonly JsonSerializerOptions HtmlMessageJsonOptions = new()
         {
             PropertyNameCaseInsensitive = true
@@ -590,6 +595,22 @@ namespace RadEdit
             public int? Height { get; set; }
         }
 
+        private sealed class SnippetConfig
+        {
+            public string? PopupHotkey { get; set; }
+            public List<SnippetHotkeyBinding> Items { get; } = new();
+        }
+
+        private sealed class SnippetHotkeyBinding
+        {
+            public string HotkeyText { get; set; } = string.Empty;
+            public int Modifiers { get; set; }
+            public int VirtualKey { get; set; }
+            public string Label { get; set; } = string.Empty;
+            public string Rtf { get; set; } = string.Empty;
+            public string PreviewText { get; set; } = string.Empty;
+        }
+
         private const string HtmlHostName = "radedit.local";
         private const string HtmlLanguage = "fr-CA";
         private const string LanguageToolBaseUrl = "http://localhost:8081";
@@ -610,6 +631,11 @@ namespace RadEdit
         private const int HotkeyModifiers = NativeMethods.MOD_CONTROL | NativeMethods.MOD_ALT;
         private const int HotkeyApplyKey = NativeMethods.VK_F11;
         private const int HotkeyIgnoreKey = NativeMethods.VK_F12;
+        private const int SnippetPopupHotkeyId = 0x1A20;
+        private const int SnippetHotkeyBaseId = 0x1A40;
+        private const int MaxSnippetHotkeys = 64;
+        private const string SnippetConfigBeginMarker = "@@BEGIN:SNIPPETS@@";
+        private const string SnippetConfigEndMarker = "@@END:SNIPPETS@@";
         private const int HtmlBarHeightFallback = 30;
         private const double DefaultHtmlSplitPercent = 0.5;
         private const int HtmlMetaSampleLimit = 65536;
@@ -620,6 +646,7 @@ namespace RadEdit
         private bool isHtmlMode;
         private HtmlViewMode htmlViewMode = HtmlViewMode.Split;
         private double htmlSplitPercent = DefaultHtmlSplitPercent;
+        private string? activeHtmlSnippetPayload;
         private string lastPlainText = string.Empty;
         private readonly SemaphoreSlim htmlInsertGate = new(1, 1);
         private Form? detachedHtmlHost;
@@ -651,6 +678,13 @@ namespace RadEdit
         private LanguageToolIssue? languageToolHoverIssue;
         private bool hotkeyApplyRegistered;
         private bool hotkeyIgnoreRegistered;
+        private readonly ContextMenuStrip snippetMenu = new();
+        private readonly Dictionary<int, SnippetHotkeyBinding> registeredSnippetHotkeys = new();
+        private readonly List<SnippetHotkeyBinding> activeSnippetHotkeys = new();
+        private bool snippetPopupHotkeyRegistered;
+        private int snippetPopupHotkeyModifiers;
+        private int snippetPopupHotkeyVirtualKey;
+        private string snippetPopupHotkeyText = string.Empty;
 
         public Form1()
         {
@@ -662,6 +696,8 @@ namespace RadEdit
             LoadIgnoredLanguageToolRules();
             languageToolHoverMenu.ShowImageMargin = false;
             languageToolHoverMenu.ShowCheckMargin = false;
+            snippetMenu.ShowImageMargin = false;
+            snippetMenu.ShowCheckMargin = false;
             Text = $"RadEdit V{GetAppVersion()}";
             SetDefaultTypingFont("Arial", 10f);
             richTextBox1.SelectionChanged += RichTextBox1_SelectionChanged;
@@ -793,6 +829,7 @@ namespace RadEdit
                 richTextBox1.Rtf = rtf;
             });
             ApplyStoredDataContextToRtf();
+            RefreshSnippetHotkeys();
             return true;
         }
 
@@ -833,6 +870,10 @@ namespace RadEdit
             }
 
             ApplyStoredDataContextToRtf();
+            if (replaceContent)
+            {
+                RefreshSnippetHotkeys();
+            }
             return true;
         }
 
@@ -1066,6 +1107,9 @@ namespace RadEdit
             string? htmlDataContextPayload = TryReadHtmlDataContext(fullPath, out string? parsedContext)
                 ? parsedContext
                 : null;
+            string? htmlSnippetsPayload = TryReadHtmlSnippetConfig(fullPath, out string? parsedSnippets)
+                ? parsedSnippets
+                : null;
 
             await EnsureWebView2InitializedAsync();
 
@@ -1086,6 +1130,7 @@ namespace RadEdit
             pendingHtmlDataContextPayload = string.IsNullOrWhiteSpace(htmlDataContextPayload)
                 ? null
                 : htmlDataContextPayload;
+            RefreshSnippetHotkeys(htmlSnippetsPayload, updateStoredHtmlPayload: true);
         }
 
         private void ConfigureHtmlMapping(string folder)
@@ -1837,6 +1882,34 @@ namespace RadEdit
             return false;
         }
 
+        private static bool TryReadHtmlSnippetConfig(string fullPath, out string? payload)
+        {
+            payload = null;
+
+            string sample = ReadFileSample(fullPath, HtmlMetaSampleLimit);
+            if (string.IsNullOrEmpty(sample))
+            {
+                return false;
+            }
+
+            foreach (string metaName in HtmlSnippetMetaNames)
+            {
+                string? content = ExtractMetaContent(sample, metaName);
+                if (string.IsNullOrWhiteSpace(content))
+                {
+                    continue;
+                }
+
+                string decoded = System.Net.WebUtility.HtmlDecode(content).Trim();
+                if (TryParseJsonPayload(decoded, out payload))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         private static bool TryParseHtmlDataContext(string content, out string? payload)
         {
             payload = null;
@@ -2285,6 +2358,7 @@ namespace RadEdit
             ResetWebView2();
             ResetHtmlViewOptions();
             SetHtmlMode(false);
+            RefreshSnippetHotkeys(updateStoredHtmlPayload: true);
         }
 
         private void ResetWebView2()
@@ -2431,6 +2505,7 @@ namespace RadEdit
 
             webView2.Source = uri;
             SetHtmlMode(true);
+            RefreshSnippetHotkeys(updateStoredHtmlPayload: true);
         }
 
         private async void RichTextBox1_TextChanged(object? sender, EventArgs e)
@@ -2935,21 +3010,35 @@ namespace RadEdit
 
         private void HandleHotkey(IntPtr id)
         {
-            if (!languageToolEnabled)
-            {
-                return;
-            }
-
             int hotkeyId = id.ToInt32();
+
             if (hotkeyId == HotkeyApplyId)
             {
-                ApplyActiveIssueFromHotkey();
+                if (languageToolEnabled)
+                {
+                    ApplyActiveIssueFromHotkey();
+                }
                 return;
             }
 
             if (hotkeyId == HotkeyIgnoreId)
             {
-                IgnoreActiveIssueFromHotkey();
+                if (languageToolEnabled)
+                {
+                    IgnoreActiveIssueFromHotkey();
+                }
+                return;
+            }
+
+            if (hotkeyId == SnippetPopupHotkeyId)
+            {
+                ShowSnippetMenuFromHotkey();
+                return;
+            }
+
+            if (registeredSnippetHotkeys.TryGetValue(hotkeyId, out SnippetHotkeyBinding? snippet))
+            {
+                TryInsertSnippetFromHotkey(snippet);
             }
         }
 
@@ -2960,6 +3049,12 @@ namespace RadEdit
                 return;
             }
 
+            RegisterLanguageToolHotkeys();
+            RegisterSnippetHotkeys();
+        }
+
+        private void RegisterLanguageToolHotkeys()
+        {
             hotkeyApplyRegistered = NativeMethods.RegisterHotKey(Handle, HotkeyApplyId, HotkeyModifiers, HotkeyApplyKey);
             if (!hotkeyApplyRegistered)
             {
@@ -2973,6 +3068,58 @@ namespace RadEdit
             }
         }
 
+        private void RegisterSnippetHotkeys()
+        {
+            if (!IsHandleCreated)
+            {
+                return;
+            }
+
+            UnregisterSnippetHotkeys();
+
+            var failed = new List<string>();
+            int hotkeyId = SnippetHotkeyBaseId;
+            int count = 0;
+            foreach (var snippet in activeSnippetHotkeys)
+            {
+                if (count >= MaxSnippetHotkeys)
+                {
+                    failed.Add($"Skipped extra snippets after {MaxSnippetHotkeys} entries.");
+                    break;
+                }
+
+                bool registered = NativeMethods.RegisterHotKey(Handle, hotkeyId, snippet.Modifiers, snippet.VirtualKey);
+                if (!registered)
+                {
+                    failed.Add(snippet.HotkeyText);
+                }
+                else
+                {
+                    registeredSnippetHotkeys[hotkeyId] = snippet;
+                    hotkeyId++;
+                    count++;
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(snippetPopupHotkeyText))
+            {
+                snippetPopupHotkeyRegistered = NativeMethods.RegisterHotKey(
+                    Handle,
+                    SnippetPopupHotkeyId,
+                    snippetPopupHotkeyModifiers,
+                    snippetPopupHotkeyVirtualKey);
+                if (!snippetPopupHotkeyRegistered)
+                {
+                    failed.Add($"Popup: {snippetPopupHotkeyText}");
+                }
+            }
+
+            if (failed.Count > 0)
+            {
+                ShowSnippetHotkeyRegistrationWarning(failed);
+            }
+        }
+
         private void UnregisterGlobalHotkeys()
         {
             if (!IsHandleCreated)
@@ -2980,6 +3127,12 @@ namespace RadEdit
                 return;
             }
 
+            UnregisterLanguageToolHotkeys();
+            UnregisterSnippetHotkeys();
+        }
+
+        private void UnregisterLanguageToolHotkeys()
+        {
             if (hotkeyApplyRegistered)
             {
                 NativeMethods.UnregisterHotKey(Handle, HotkeyApplyId);
@@ -2991,6 +3144,538 @@ namespace RadEdit
                 NativeMethods.UnregisterHotKey(Handle, HotkeyIgnoreId);
                 hotkeyIgnoreRegistered = false;
             }
+        }
+
+        private void UnregisterSnippetHotkeys()
+        {
+            if (!IsHandleCreated)
+            {
+                return;
+            }
+
+            foreach (int hotkeyId in registeredSnippetHotkeys.Keys)
+            {
+                NativeMethods.UnregisterHotKey(Handle, hotkeyId);
+            }
+            registeredSnippetHotkeys.Clear();
+
+            if (snippetPopupHotkeyRegistered)
+            {
+                NativeMethods.UnregisterHotKey(Handle, SnippetPopupHotkeyId);
+                snippetPopupHotkeyRegistered = false;
+            }
+        }
+
+        private void TryInsertSnippetFromHotkey(SnippetHotkeyBinding snippet)
+        {
+            if (snippet == null || string.IsNullOrWhiteSpace(snippet.Rtf))
+            {
+                return;
+            }
+
+            string normalized = NormalizeRtfForInsert(snippet.Rtf);
+            TryInsertRtf(normalized);
+        }
+
+        private void ShowSnippetMenuFromHotkey()
+        {
+            if (activeSnippetHotkeys.Count == 0)
+            {
+                return;
+            }
+
+            BuildSnippetMenuItems();
+            snippetMenu.Show(Cursor.Position);
+        }
+
+        private void BuildSnippetMenuItems()
+        {
+            snippetMenu.Items.Clear();
+            foreach (var snippet in activeSnippetHotkeys)
+            {
+                string label = string.IsNullOrWhiteSpace(snippet.Label)
+                    ? snippet.PreviewText
+                    : snippet.Label.Trim();
+                if (string.IsNullOrWhiteSpace(label))
+                {
+                    label = "(empty snippet)";
+                }
+
+                string menuText = $"{snippet.HotkeyText}  |  {label}";
+                var item = new ToolStripMenuItem(menuText)
+                {
+                    Tag = snippet
+                };
+                item.Click += SnippetMenuItem_Click;
+                snippetMenu.Items.Add(item);
+            }
+        }
+
+        private void SnippetMenuItem_Click(object? sender, EventArgs e)
+        {
+            if (sender is not ToolStripMenuItem item)
+            {
+                return;
+            }
+
+            if (item.Tag is not SnippetHotkeyBinding snippet)
+            {
+                return;
+            }
+
+            TryInsertSnippetFromHotkey(snippet);
+        }
+
+        private void ShowSnippetHotkeyRegistrationWarning(List<string> failedEntries)
+        {
+            string message = "Some snippet hotkeys could not be registered (likely already used by another app):"
+                + Environment.NewLine
+                + string.Join(Environment.NewLine, failedEntries);
+
+            LogDebug(message);
+            MessageBox.Show(
+                this,
+                message,
+                "Snippet Hotkey Registration",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
+
+        private void RefreshSnippetHotkeys(string? htmlPayload = null, bool updateStoredHtmlPayload = false)
+        {
+            if (updateStoredHtmlPayload)
+            {
+                activeHtmlSnippetPayload = string.IsNullOrWhiteSpace(htmlPayload) ? null : htmlPayload;
+            }
+
+            string? effectiveHtmlPayload = !string.IsNullOrWhiteSpace(htmlPayload)
+                ? htmlPayload
+                : activeHtmlSnippetPayload;
+            bool hasHtmlPayload = !string.IsNullOrWhiteSpace(effectiveHtmlPayload);
+            bool hasRtfPayload = TryReadSnippetPayloadFromRtfText(richTextBox1.Text, out string? rtfPayload);
+
+            string? selectedPayload = null;
+            if (hasHtmlPayload && hasRtfPayload)
+            {
+                selectedPayload = rtfPayload;
+                MessageBox.Show(
+                    this,
+                    "Snippet definitions were found in both HTML metadata and RTF markers. "
+                    + "RTF snippets are being used. Remove one source to avoid conflicts.",
+                    "Snippet Source Conflict",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+            }
+            else if (hasRtfPayload)
+            {
+                selectedPayload = rtfPayload;
+            }
+            else if (hasHtmlPayload)
+            {
+                selectedPayload = effectiveHtmlPayload;
+            }
+
+            if (string.IsNullOrWhiteSpace(selectedPayload))
+            {
+                ClearSnippetHotkeys();
+                return;
+            }
+
+            if (!TryParseSnippetConfig(selectedPayload, out SnippetConfig config, out List<string> warnings, out string? parseError))
+            {
+                ClearSnippetHotkeys();
+                string source = !string.IsNullOrWhiteSpace(rtfPayload) ? "RTF markers" : "HTML metadata";
+                MessageBox.Show(
+                    this,
+                    $"Failed to parse snippet config from {source}: {parseError}",
+                    "Snippet Config",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return;
+            }
+
+            ApplySnippetHotkeys(config);
+            if (warnings.Count > 0)
+            {
+                string warningText = "Some snippet entries were skipped:" + Environment.NewLine + string.Join(Environment.NewLine, warnings);
+                LogDebug(warningText);
+                MessageBox.Show(
+                    this,
+                    warningText,
+                    "Snippet Config",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+            }
+        }
+
+        private void ApplySnippetHotkeys(SnippetConfig config)
+        {
+            activeSnippetHotkeys.Clear();
+            activeSnippetHotkeys.AddRange(config.Items);
+
+            snippetPopupHotkeyText = string.Empty;
+            snippetPopupHotkeyModifiers = 0;
+            snippetPopupHotkeyVirtualKey = 0;
+
+            if (!string.IsNullOrWhiteSpace(config.PopupHotkey))
+            {
+                if (TryParseHotkey(config.PopupHotkey, out int modifiers, out int virtualKey, out string? error))
+                {
+                    snippetPopupHotkeyText = config.PopupHotkey.Trim();
+                    snippetPopupHotkeyModifiers = modifiers;
+                    snippetPopupHotkeyVirtualKey = virtualKey;
+                }
+                else
+                {
+                    MessageBox.Show(
+                        this,
+                        $"Popup hotkey is invalid and was skipped: {config.PopupHotkey}{Environment.NewLine}{error}",
+                        "Snippet Config",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                }
+            }
+
+            RegisterSnippetHotkeys();
+        }
+
+        private void ClearSnippetHotkeys()
+        {
+            activeSnippetHotkeys.Clear();
+            snippetPopupHotkeyText = string.Empty;
+            snippetPopupHotkeyModifiers = 0;
+            snippetPopupHotkeyVirtualKey = 0;
+            snippetMenu.Items.Clear();
+            snippetMenu.Close();
+            UnregisterSnippetHotkeys();
+        }
+
+        private static bool TryReadSnippetPayloadFromRtfText(string text, out string? payload)
+        {
+            payload = null;
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return false;
+            }
+
+            int beginIndex = text.IndexOf(SnippetConfigBeginMarker, StringComparison.OrdinalIgnoreCase);
+            if (beginIndex < 0)
+            {
+                return false;
+            }
+
+            beginIndex += SnippetConfigBeginMarker.Length;
+            int endIndex = text.IndexOf(SnippetConfigEndMarker, beginIndex, StringComparison.OrdinalIgnoreCase);
+            if (endIndex < 0 || endIndex <= beginIndex)
+            {
+                return false;
+            }
+
+            string extracted = text.Substring(beginIndex, endIndex - beginIndex).Trim();
+            extracted = Regex.Replace(extracted, @"^(\\par\s*)+", string.Empty, RegexOptions.CultureInvariant);
+            extracted = Regex.Replace(extracted, @"(\s*\\par)+$", string.Empty, RegexOptions.CultureInvariant);
+            extracted = extracted.Trim();
+            if (string.IsNullOrWhiteSpace(extracted))
+            {
+                return false;
+            }
+
+            payload = extracted;
+            return true;
+        }
+
+        private bool TryParseSnippetConfig(
+            string payload,
+            out SnippetConfig config,
+            out List<string> warnings,
+            out string? error)
+        {
+            config = new SnippetConfig();
+            warnings = new List<string>();
+            error = null;
+
+            JsonNode? root;
+            try
+            {
+                root = JsonNode.Parse(payload);
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return false;
+            }
+
+            JsonArray? items = null;
+            if (root is JsonArray rootArray)
+            {
+                items = rootArray;
+            }
+            else if (root is JsonObject rootObject)
+            {
+                config.PopupHotkey = TryReadJsonString(rootObject, "popupHotkey")
+                    ?? TryReadJsonString(rootObject, "menuHotkey");
+
+                JsonNode? itemsNode = rootObject["items"] ?? rootObject["snippets"];
+                if (itemsNode is JsonArray parsedItems)
+                {
+                    items = parsedItems;
+                }
+                else
+                {
+                    error = "JSON object must contain an 'items' array.";
+                    return false;
+                }
+            }
+            else
+            {
+                error = "Snippet JSON must be an object or array.";
+                return false;
+            }
+
+            var uniqueHotkeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            int itemIndex = 0;
+            foreach (JsonNode? itemNode in items)
+            {
+                itemIndex++;
+                if (itemNode is not JsonObject itemObject)
+                {
+                    warnings.Add($"Item #{itemIndex}: expected an object.");
+                    continue;
+                }
+
+                string hotkey = TryReadJsonString(itemObject, "hotkey")?.Trim() ?? string.Empty;
+                string rtf = TryReadJsonString(itemObject, "rtf") ?? string.Empty;
+                string label = TryReadJsonString(itemObject, "label")
+                    ?? TryReadJsonString(itemObject, "name")
+                    ?? string.Empty;
+
+                if (string.IsNullOrWhiteSpace(hotkey))
+                {
+                    warnings.Add($"Item #{itemIndex}: missing hotkey.");
+                    continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(rtf))
+                {
+                    warnings.Add($"Item #{itemIndex} ({hotkey}): missing rtf.");
+                    continue;
+                }
+
+                if (!TryParseHotkey(hotkey, out int modifiers, out int virtualKey, out string? hotkeyError))
+                {
+                    warnings.Add($"Item #{itemIndex} ({hotkey}): {hotkeyError}");
+                    continue;
+                }
+
+                string keySignature = modifiers.ToString(CultureInfo.InvariantCulture) + ":" + virtualKey.ToString(CultureInfo.InvariantCulture);
+                if (!uniqueHotkeys.Add(keySignature))
+                {
+                    warnings.Add($"Item #{itemIndex} ({hotkey}): duplicate hotkey.");
+                    continue;
+                }
+
+                string preview = BuildSnippetPreview(rtf);
+                config.Items.Add(new SnippetHotkeyBinding
+                {
+                    HotkeyText = hotkey,
+                    Modifiers = modifiers,
+                    VirtualKey = virtualKey,
+                    Label = label,
+                    Rtf = rtf,
+                    PreviewText = preview
+                });
+            }
+
+            if (config.Items.Count == 0)
+            {
+                error = warnings.Count > 0
+                    ? "No valid snippet entries were found."
+                    : "No snippet items were provided.";
+                return false;
+            }
+
+            return true;
+        }
+
+        private static string? TryReadJsonString(JsonObject obj, string propertyName)
+        {
+            if (!obj.TryGetPropertyValue(propertyName, out JsonNode? value) || value == null)
+            {
+                return null;
+            }
+
+            if (value is JsonValue jsonValue)
+            {
+                if (jsonValue.TryGetValue<string>(out string? stringValue))
+                {
+                    return stringValue;
+                }
+            }
+
+            return value.ToString();
+        }
+
+        private static bool TryParseHotkey(string text, out int modifiers, out int virtualKey, out string? error)
+        {
+            modifiers = 0;
+            virtualKey = 0;
+            error = null;
+
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                error = "Hotkey is empty.";
+                return false;
+            }
+
+            string[] tokens = text.Split('+', StringSplitOptions.RemoveEmptyEntries);
+            if (tokens.Length == 0)
+            {
+                error = "Hotkey is empty.";
+                return false;
+            }
+
+            string? keyToken = null;
+            foreach (string raw in tokens)
+            {
+                string token = raw.Trim();
+                if (token.Length == 0)
+                {
+                    continue;
+                }
+
+                switch (token.ToUpperInvariant())
+                {
+                    case "CTRL":
+                    case "CONTROL":
+                        modifiers |= NativeMethods.MOD_CONTROL;
+                        continue;
+                    case "ALT":
+                        modifiers |= NativeMethods.MOD_ALT;
+                        continue;
+                    case "SHIFT":
+                        modifiers |= NativeMethods.MOD_SHIFT;
+                        continue;
+                    case "WIN":
+                    case "WINDOWS":
+                    case "META":
+                        modifiers |= NativeMethods.MOD_WIN;
+                        continue;
+                }
+
+                if (keyToken != null)
+                {
+                    error = "Only one non-modifier key is allowed.";
+                    return false;
+                }
+
+                keyToken = token;
+            }
+
+            if (keyToken == null)
+            {
+                error = "Missing key value (example: Ctrl+Alt+1).";
+                return false;
+            }
+
+            if (!TryParseVirtualKey(keyToken, out virtualKey))
+            {
+                error = $"Unsupported key '{keyToken}'.";
+                return false;
+            }
+
+            return true;
+        }
+
+        private static bool TryParseVirtualKey(string token, out int virtualKey)
+        {
+            virtualKey = 0;
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                return false;
+            }
+
+            string trimmed = token.Trim();
+            string upper = trimmed.ToUpperInvariant();
+
+            if (upper.Length == 1 && upper[0] >= 'A' && upper[0] <= 'Z')
+            {
+                virtualKey = upper[0];
+                return true;
+            }
+
+            if (upper.Length == 1 && upper[0] >= '0' && upper[0] <= '9')
+            {
+                virtualKey = upper[0];
+                return true;
+            }
+
+            if (upper.StartsWith("F", StringComparison.Ordinal) &&
+                int.TryParse(upper.Substring(1), NumberStyles.Integer, CultureInfo.InvariantCulture, out int fnKey) &&
+                fnKey >= 1 &&
+                fnKey <= 24)
+            {
+                virtualKey = (int)Keys.F1 + (fnKey - 1);
+                return true;
+            }
+
+            if (Enum.TryParse(trimmed, true, out Keys parsed))
+            {
+                virtualKey = (int)(parsed & Keys.KeyCode);
+                return virtualKey != 0;
+            }
+
+            switch (upper)
+            {
+                case "SPACE":
+                    virtualKey = (int)Keys.Space;
+                    return true;
+                case "ESC":
+                    virtualKey = (int)Keys.Escape;
+                    return true;
+                case "PGUP":
+                    virtualKey = (int)Keys.PageUp;
+                    return true;
+                case "PGDN":
+                    virtualKey = (int)Keys.PageDown;
+                    return true;
+                case "INS":
+                    virtualKey = (int)Keys.Insert;
+                    return true;
+                case "DEL":
+                    virtualKey = (int)Keys.Delete;
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private static string BuildSnippetPreview(string rtf)
+        {
+            const int MaxLength = 80;
+            if (string.IsNullOrWhiteSpace(rtf))
+            {
+                return string.Empty;
+            }
+
+            string plain;
+            try
+            {
+                using var probe = new RichTextBox();
+                probe.Rtf = NormalizeRtfForInsert(rtf);
+                plain = probe.Text ?? string.Empty;
+            }
+            catch
+            {
+                plain = rtf;
+            }
+
+            string compact = Regex.Replace(plain, @"\s+", " ").Trim();
+            if (compact.Length <= MaxLength)
+            {
+                return compact;
+            }
+
+            return compact.Substring(0, MaxLength) + "...";
         }
 
         private void ApplyActiveIssueFromHotkey()
@@ -4710,6 +5395,38 @@ namespace RadEdit
             return false;
         }
 
+        private static bool TryParseJsonPayload(string content, out string? payload)
+        {
+            payload = null;
+            if (string.IsNullOrWhiteSpace(content))
+            {
+                return false;
+            }
+
+            string trimmed = content.Trim();
+            if (!trimmed.StartsWith("{", StringComparison.Ordinal) &&
+                !trimmed.StartsWith("[", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            try
+            {
+                JsonNode? node = JsonNode.Parse(trimmed);
+                if (node is JsonObject || node is JsonArray)
+                {
+                    payload = trimmed;
+                    return true;
+                }
+            }
+            catch
+            {
+                return false;
+            }
+
+            return false;
+        }
+
         private static int FindHiddenOnControlWordStart(string rtf, int searchIndex)
         {
             int index = searchIndex;
@@ -5047,6 +5764,7 @@ namespace RadEdit
             languageToolTimer.Dispose();
             languageToolClient.Dispose();
             languageToolHoverMenu.Dispose();
+            snippetMenu.Dispose();
             UnregisterGlobalHotkeys();
             base.OnFormClosing(e);
         }
@@ -5088,7 +5806,7 @@ namespace RadEdit
                 return $"{parsed.Major}.{parsed.Minor}";
             }
 
-            return "0.2.4";
+            return "0.2.5";
         }
 
         private static class NativeMethods
@@ -5098,6 +5816,7 @@ namespace RadEdit
             internal const int MOD_ALT = 0x0001;
             internal const int MOD_CONTROL = 0x0002;
             internal const int MOD_SHIFT = 0x0004;
+            internal const int MOD_WIN = 0x0008;
             internal const int VK_F11 = 0x7A;
             internal const int VK_F12 = 0x7B;
 

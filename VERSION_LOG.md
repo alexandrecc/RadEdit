@@ -1,5 +1,17 @@
 # Version Log
 
+## v0.2.5 - 2026-02-06
+
+Changes since the previous version:
+
+- Added per-template global snippet hotkeys for RTF fragment insertion at the current RTF caret.
+- Added optional global snippet popup hotkey with a menu showing each hotkey and insertion preview.
+- Added snippet config loading from hidden RTF marker blocks (`@@BEGIN:SNIPPETS@@` / `@@END:SNIPPETS@@`).
+- Added snippet config loading from HTML metadata (`<meta name="radedit:snippets" ...>` / `radedit:hotkeys`).
+- Added warnings for conflicting snippet sources (HTML + RTF) and hotkey registration collisions.
+- Added parsing cleanup so hidden RTF snippet payloads with leading/trailing `\par` still parse as JSON.
+- Added a 10-hotkey demo bundle in `examples\snippet-hotkeys-demo.*` (RTF + HTML + AHK).
+
 ## v0.2.4 - 2026-02-05
 
 Changes since the previous version:

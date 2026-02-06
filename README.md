@@ -316,6 +316,70 @@ To replace the entire context, use the JSON replace payload:
 <meta name="radedit:context" content='{"__mode":"replace","data":{"patientId":"123456"}}'>
 ```
 
+## Global Snippet Hotkeys
+
+RadEdit can register system-wide snippet hotkeys per template and insert RTF fragments at the current RTF caret without forcing RadEdit focus.
+
+- Supported scope: per loaded template/document.
+- Supported key format: full combos like `Ctrl+Alt+1`, `Ctrl+Shift+F2`, `Win+Alt+S`.
+- Optional popup hotkey opens a menu showing each snippet hotkey plus a short insertion preview.
+- If a hotkey registration fails (collision with another app), RadEdit shows a warning.
+
+### Snippet Source
+
+You can define snippets in either source:
+
+- Hidden RTF marker block (recommended for this project).
+- HTML metadata (`<meta name="radedit:snippets" ...>`).
+
+If both are present, RadEdit warns and uses the RTF snippet block.
+
+### JSON Shape
+
+```json
+{
+  "popupHotkey": "Ctrl+Alt+Space",
+  "items": [
+    {
+      "hotkey": "Ctrl+Alt+1",
+      "label": "Impression normale",
+      "rtf": "{\\b Impression:}\\b0 Normale\\par"
+    },
+    {
+      "hotkey": "Ctrl+Alt+2",
+      "label": "Recommandation",
+      "rtf": "{\\i Recommandation:}\\i0 Contr\\'f4le dans 1 an.\\par"
+    }
+  ]
+}
+```
+
+### RTF Marker Example
+
+```rtf
+{\v @@BEGIN:SNIPPETS@@
+{
+  "popupHotkey": "Ctrl+Alt+Space",
+  "items": [
+    { "hotkey": "Ctrl+Alt+1", "label": "Impression normale", "rtf": "{\\b Impression:}\\b0 Normale\\par" }
+  ]
+}
+@@END:SNIPPETS@@}
+```
+
+### HTML Meta Example
+
+```html
+<meta name="radedit:snippets"
+      content='{"popupHotkey":"Ctrl+Alt+Space","items":[{"hotkey":"Ctrl+Alt+1","label":"Impression normale","rtf":"{\\\\b Impression:}\\\\b0 Normale\\\\par"}]}'>
+```
+
+Demo bundle (10 hotkeys):
+
+- `examples\snippet-hotkeys-demo.rtf`
+- `examples\snippet-hotkeys-demo.html`
+- `examples\snippet-hotkeys-demo.ahk`
+
 ## Troubleshooting
 
 - **SetRtf/InsertRtf fails silently**: ensure the payload is valid RTF (e.g., starts with `{\rtf`).

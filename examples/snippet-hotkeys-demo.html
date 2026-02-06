@@ -1,0 +1,111 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="radedit:view" content="mode=split;size=45" />
+  <title>Snippet Hotkeys Demo</title>
+  <style>
+    :root {
+      --bg: #f6f7fb;
+      --panel: #ffffff;
+      --ink: #1f2a37;
+      --muted: #5b6776;
+      --line: #d6dde7;
+      --accent: #1d6fd8;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, sans-serif;
+      color: var(--ink);
+      background: linear-gradient(140deg, #eef3fb 0%, var(--bg) 55%, #edf7f3 100%);
+      min-height: 100vh;
+      padding: 24px;
+    }
+    .wrap {
+      max-width: 980px;
+      margin: 0 auto;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 20px;
+      box-shadow: 0 8px 30px rgba(16, 29, 44, 0.08);
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 24px;
+    }
+    p {
+      margin: 0 0 10px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    .kbd {
+      display: inline-block;
+      border: 1px solid var(--line);
+      border-bottom-width: 2px;
+      border-radius: 6px;
+      padding: 2px 8px;
+      font-family: Consolas, monospace;
+      color: var(--ink);
+      background: #fff;
+      white-space: nowrap;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 14px;
+      font-size: 14px;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+      padding: 10px;
+    }
+    th {
+      background: #f0f5ff;
+      color: #0e3f88;
+      font-weight: 600;
+    }
+    .hint {
+      margin-top: 14px;
+      padding: 10px 12px;
+      border: 1px solid #bfd4f6;
+      background: #f3f8ff;
+      border-radius: 8px;
+      color: #124a9c;
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <h1>Global Snippet Hotkeys Demo</h1>
+    <p>The snippets are defined in <code>snippet-hotkeys-demo.rtf</code> (hidden marker block).</p>
+    <p>Use <span class="kbd">Ctrl+Alt+Space</span> for the popup, or direct hotkeys <span class="kbd">Ctrl+Alt+1</span> through <span class="kbd">Ctrl+Alt+0</span>.</p>
+
+    <table>
+      <thead>
+        <tr><th>Hotkey</th><th>Label</th><th>Inserted text</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><span class="kbd">Ctrl+Alt+1</span></td><td>Technique</td><td>Technique sentence</td></tr>
+        <tr><td><span class="kbd">Ctrl+Alt+2</span></td><td>Comparison</td><td>Comparison sentence</td></tr>
+        <tr><td><span class="kbd">Ctrl+Alt+3</span></td><td>Breast density</td><td>Density sentence</td></tr>
+        <tr><td><span class="kbd">Ctrl+Alt+4</span></td><td>Right breast</td><td>Right breast sentence</td></tr>
+        <tr><td><span class="kbd">Ctrl+Alt+5</span></td><td>Left breast</td><td>Left breast sentence</td></tr>
+        <tr><td><span class="kbd">Ctrl+Alt+6</span></td><td>Axilla</td><td>Axillary sentence</td></tr>
+        <tr><td><span class="kbd">Ctrl+Alt+7</span></td><td>Impression benign</td><td>Benign impression sentence</td></tr>
+        <tr><td><span class="kbd">Ctrl+Alt+8</span></td><td>Recommendation annual</td><td>Annual follow-up sentence</td></tr>
+        <tr><td><span class="kbd">Ctrl+Alt+9</span></td><td>Recommendation ultrasound</td><td>Ultrasound recommendation sentence</td></tr>
+        <tr><td><span class="kbd">Ctrl+Alt+0</span></td><td>Conclusion normal</td><td>Normal conclusion sentence</td></tr>
+      </tbody>
+    </table>
+
+    <div class="hint">
+      Tip: move focus to another app and press a snippet hotkey. RadEdit receives the global hotkey and inserts at its current RTF caret/selection.
+    </div>
+  </main>
+</body>
+</html>
