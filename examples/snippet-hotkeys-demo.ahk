@@ -42,7 +42,7 @@ SendCopyData(target, CMD["SetHtmlFile"], htmlPath)
 SendCopyData(target, CMD["SetTitle"], "Snippet Hotkeys Demo (10)")
 SendCopyData(target, CMD["GotoEnd"], "")
 
-MsgBox "Demo loaded.`n`nGlobal snippet hotkeys:`n  Ctrl+Alt+1 .. Ctrl+Alt+0`nPopup menu:`n  Ctrl+Alt+Space"
+MsgBox "Demo loaded.`n`nGlobal snippet hotkeys:`n  Ctrl+0, Ctrl+2 .. Ctrl+9, Ctrl+F12`nPopup menu:`n  Ctrl+1"
 return
 
 CopyDataHandler(wParam, lParam, msg, hwnd) {
