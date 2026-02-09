@@ -1,5 +1,14 @@
 # Version Log
 
+## v0.2.6 - 2026-02-09
+
+Changes since the previous version:
+
+- Fixed HTML metadata parsing for `<meta name="radedit:context" ...>` so JSON now works directly in single-quoted `content` attributes (for example `content='{"patientId":"123456"}'`).
+- Kept HTML-encoded quote support (`&quot;`) for backward compatibility in metadata payloads.
+- Fixed `GetDataContext` response serialization so accented characters and symbols are returned as readable UTF-8 JSON (for example `É`, `+`) instead of escaped `\uXXXX`.
+- Added `examples\data-context-accents-demo.ahk` to validate `SetDataContext`/`GetDataContext` with accents using raw WM_COPYDATA output (no AHK JSON parsing).
+
 ## v0.2.5 - 2026-02-06
 
 Changes since the previous version:

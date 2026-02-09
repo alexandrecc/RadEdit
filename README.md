@@ -156,6 +156,8 @@ SendCopyData(hwnd, command, text := "") {
 
 Run `examples\data-context-demo.ahk` to send a `SetDataContext` JSON payload and request the `patientId` back via `GetDataContext`. A `DataContextResponse` message box confirms the round trip.
 
+Run `examples\data-context-accents-demo.ahk` to verify accented characters (for example `CÉRÉBRAL`, `+`) round-trip through `SetDataContext`/`GetDataContext` and display correctly in the raw response, without JSON parsing in AutoHotkey.
+
 Run `examples\html-routing-setdatacontext-test.ahk` to load the HTML routing demo and send a richer `SetDataContext` payload that updates both HTML fields and RTF placeholders.
 
 Open `examples\html-datacontext-demo.html` in RadEdit to see HTML header seeding (`radedit:context`), `window.RadEdit.setDataContext` / `getDataContext`, and `window.RadEdit.updateView` in action. The launcher script `examples\html-datacontext-demo.ahk` loads it for you.
@@ -307,6 +309,7 @@ Local HTML files can also seed the data context with a meta tag. The content can
 
 ```
 <meta name="radedit:context" content='{"patientId":"123456","accession":"ABC-2026-0001"}'>
+<meta name="radedit:context" content="{&quot;patientId&quot;:&quot;123456&quot;,&quot;accession&quot;:&quot;ABC-2026-0001&quot;}">
 <meta name="radedit:context" content="patientId=123456; accession=ABC-2026-0001">
 ```
 

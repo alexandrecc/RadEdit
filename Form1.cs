@@ -6,6 +6,7 @@ using System.Globalization;
 using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
@@ -69,6 +70,10 @@ namespace RadEdit
         private static readonly JsonSerializerOptions HtmlMessageJsonOptions = new()
         {
             PropertyNameCaseInsensitive = true
+        };
+        private static readonly JsonSerializerOptions RelaxedJsonOptions = new()
+        {
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
         };
         private static readonly object DebugLogLock = new();
         private static readonly string DebugLogPath = InitializeDebugLogPath();
@@ -2004,7 +2009,8 @@ namespace RadEdit
         {
             var metaRegex = new Regex("<meta\\s+[^>]*>", RegexOptions.IgnoreCase);
             var nameRegex = new Regex("name\\s*=\\s*[\"'](?<name>[^\"']+)[\"']", RegexOptions.IgnoreCase);
-            var contentRegex = new Regex("content\\s*=\\s*[\"'](?<content>[^\"']*)[\"']", RegexOptions.IgnoreCase);
+            var contentSingleQuoteRegex = new Regex("content\\s*=\\s*'(?<content>[^']*)'", RegexOptions.IgnoreCase);
+            var contentDoubleQuoteRegex = new Regex("content\\s*=\\s*\"(?<content>[^\"]*)\"", RegexOptions.IgnoreCase);
 
             foreach (Match match in metaRegex.Matches(html))
             {
@@ -2021,7 +2027,11 @@ namespace RadEdit
                     continue;
                 }
 
-                Match contentMatch = contentRegex.Match(tag);
+                Match contentMatch = contentSingleQuoteRegex.Match(tag);
+                if (!contentMatch.Success)
+                {
+                    contentMatch = contentDoubleQuoteRegex.Match(tag);
+                }
                 if (!contentMatch.Success)
                 {
                     continue;
@@ -4492,7 +4502,7 @@ namespace RadEdit
             }
 
             JsonNode? node = ResolveDataContextValue(payload);
-            string response = node?.ToJsonString() ?? "null";
+            string response = node?.ToJsonString(RelaxedJsonOptions) ?? "null";
             return NativeMethods.SendCopyData(recipient, CopyDataCommand.DataContextResponse, response);
         }
 
@@ -5806,7 +5816,7 @@ namespace RadEdit
                 return $"{parsed.Major}.{parsed.Minor}";
             }
 
-            return "0.2.5";
+            return "0.2.6";
         }
 
         private static class NativeMethods
