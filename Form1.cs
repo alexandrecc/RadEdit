@@ -1008,7 +1008,67 @@ namespace RadEdit
                 return rtf;
             }
 
-            return Regex.Replace(rtf, "@@(BEGIN|END):[^@\\r\\n]+@@", string.Empty, RegexOptions.CultureInvariant);
+            using var buffer = new RichTextBox();
+            buffer.Rtf = rtf;
+
+            StripHiddenSnippetBlockFromRichText(buffer);
+            StripMarkerTokensFromRichText(buffer);
+
+            return buffer.Rtf;
+        }
+
+        private static void StripHiddenSnippetBlockFromRichText(RichTextBox buffer)
+        {
+            while (true)
+            {
+                string text = buffer.Text ?? string.Empty;
+                if (string.IsNullOrEmpty(text))
+                {
+                    return;
+                }
+
+                int beginIndex = text.IndexOf(SnippetConfigBeginMarker, StringComparison.OrdinalIgnoreCase);
+                if (beginIndex < 0)
+                {
+                    return;
+                }
+
+                int endIndex = text.IndexOf(SnippetConfigEndMarker, beginIndex + SnippetConfigBeginMarker.Length, StringComparison.OrdinalIgnoreCase);
+                if (endIndex < 0)
+                {
+                    return;
+                }
+
+                int removeLength = (endIndex + SnippetConfigEndMarker.Length) - beginIndex;
+                if (removeLength <= 0)
+                {
+                    return;
+                }
+
+                buffer.Select(beginIndex, removeLength);
+                buffer.SelectedText = string.Empty;
+            }
+        }
+
+        private static void StripMarkerTokensFromRichText(RichTextBox buffer)
+        {
+            string text = buffer.Text ?? string.Empty;
+            if (string.IsNullOrEmpty(text))
+            {
+                return;
+            }
+
+            MatchCollection matches = Regex.Matches(
+                text,
+                "@@(BEGIN|END):[^@\\r\\n]+@@",
+                RegexOptions.CultureInvariant);
+
+            for (int i = matches.Count - 1; i >= 0; i--)
+            {
+                Match match = matches[i];
+                buffer.Select(match.Index, match.Length);
+                buffer.SelectedText = string.Empty;
+            }
         }
 
         private bool TrySetHtmlFile(string? path, IntPtr senderHandle)
@@ -5816,7 +5876,7 @@ namespace RadEdit
                 return $"{parsed.Major}.{parsed.Minor}";
             }
 
-            return "0.2.6";
+            return "0.2.7";
         }
 
         private static class NativeMethods

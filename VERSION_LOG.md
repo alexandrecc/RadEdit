@@ -1,9 +1,22 @@
 # Version Log
 
+## v0.2.7 - 2026-03-17
+
+Changes since the previous version:
+
+- Fixed `RequestTempFile` sanitization so `stripHiddenMarkers=true` now removes hidden `@@BEGIN:SNIPPETS@@ ... @@END:SNIPPETS@@` metadata blocks from exported RTF instead of only stripping the marker labels.
+- Added `examples\request-tempfile-snippet-sanitize-test.ahk` to verify raw vs sanitized `RequestTempFile` export behavior for hidden snippet metadata.
+- Fixed HTML metadata parsing for `<meta name="radedit:context" ...>` so JSON now works directly in single-quoted `content` attributes (for example `content='{"patientId":"123456"}'`).
+- Kept HTML-encoded quote support (`&quot;`) for backward compatibility in metadata payloads.
+- Fixed `GetDataContext` response serialization so accented characters and symbols are returned as readable UTF-8 JSON (for example `É`, `+`) instead of escaped `\uXXXX`.
+- Added `examples\data-context-accents-demo.ahk` to validate `SetDataContext`/`GetDataContext` with accents using raw WM_COPYDATA output (no AHK JSON parsing).
+
 ## v0.2.6 - 2026-02-09
 
 Changes since the previous version:
 
+- Fixed `RequestTempFile` sanitization so `stripHiddenMarkers=true` now removes hidden `@@BEGIN:SNIPPETS@@ ... @@END:SNIPPETS@@` metadata blocks from exported RTF instead of only stripping the marker labels.
+- Added `examples\request-tempfile-snippet-sanitize-test.ahk` to verify raw vs sanitized `RequestTempFile` export behavior for hidden snippet metadata.
 - Fixed HTML metadata parsing for `<meta name="radedit:context" ...>` so JSON now works directly in single-quoted `content` attributes (for example `content='{"patientId":"123456"}'`).
 - Kept HTML-encoded quote support (`&quot;`) for backward compatibility in metadata payloads.
 - Fixed `GetDataContext` response serialization so accented characters and symbols are returned as readable UTF-8 JSON (for example `É`, `+`) instead of escaped `\uXXXX`.
