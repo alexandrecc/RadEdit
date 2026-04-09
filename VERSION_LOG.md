@@ -1,5 +1,22 @@
 # Version Log
 
+## v0.2.8 - 2026-04-06
+
+Changes since the previous version:
+
+- Added a selectable proofreading provider to the correction bar so users can switch between `LanguageTool` and a local LM Studio-backed LLM.
+- Added a sentence-level LM Studio proofreading path that calls the local OpenAI-compatible `/v1/completions` API using the configured local LLM model, asks for conservative grammar-only fixes, and converts the corrected sentence back into accept/reject suggestions inside RadEdit.
+- Kept the existing correction workflow for the LLM path: underlines, hover menu, Prev/Next navigation, Apply, Ignore, and proofreading hotkeys all continue to work with per-suggestion acceptance.
+- Added persisted proofreading settings in `%APPDATA%\RadEdit\proofing-settings.json` for the enabled state, selected provider, LM Studio base URL, and model id.
+- Improved suggestion handling so empty-string replacements now surface as `(delete)` and can still be applied from the combo box or hover menu.
+- Restored the default LM Studio proofreading model to `qwen3.5-9b-claude-4.6-opus-reasoning-distilled-v2`.
+- Stopped treating bare structured LLM replies like `{}` as visible proofreading corrections, and added debug logging for invalid LLM replies plus generated LLM suggestions.
+- Added automatic migration from the temporary `gemma-4-31b-it` default back to the restored Qwen default, persist that normalized setting, and now log LLM HTTP/model-load failures plus unchanged LLM responses.
+- Tightened the LM Studio JSON contract so the model must explicitly report whether it changed a gender/number agreement; if not, RadEdit now keeps the original sentence even if `corrected` contains other edits.
+- Disabled runtime debug log writing by default, so HTML routing and LLM proofing no longer append to the debug log during normal RadEdit runs.
+- Changed first-run proofing defaults so `Proof` starts unchecked and the default proofing provider/model are the local Qwen 9B LM Studio path.
+- Added `%APPDATA%\RadEdit\config.json` to persist the main window size/position and the `Proof` checkbox state across launches.
+
 ## v0.2.7 - 2026-03-17
 
 Changes since the previous version:

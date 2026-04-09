@@ -39,6 +39,32 @@ Invoke-WebRequest -Uri "http://localhost:8081/v2/check" -Method Post -Body @{
 
 When integrating, call `/v2/check` with `language=fr` to force French rules.
 
+## Local LLM Proofreading (LM Studio)
+
+RadEdit can also use a local LM Studio model as an alternative proofreading engine. The built-in default targets:
+
+- Base URL: `http://10.0.0.149:1234`
+- Model: `qwen3.5-9b-claude-4.6-opus-reasoning-distilled-v2`
+
+The LLM path checks text sentence by sentence, asks for conservative grammar/spelling corrections only, and then converts the corrected sentence into the same per-issue UI used by LanguageTool so each suggestion can still be accepted or dismissed individually.
+
+On a first run with no saved settings, the `Proof` toggle starts unchecked and the default provider/model are `LLM (Qwen 9B)` with the LM Studio endpoint above.
+
+RadEdit persists the proofing engine settings in `%APPDATA%\RadEdit\proofing-settings.json`:
+
+```json
+{
+  "enabled": false,
+  "provider": "LocalLlm",
+  "llmBaseUrl": "http://10.0.0.149:1234",
+  "llmModel": "qwen3.5-9b-claude-4.6-opus-reasoning-distilled-v2"
+}
+```
+
+If your LM Studio server or model id changes, edit that file and restart RadEdit.
+
+RadEdit persists the main window size/position and the `Proof` checkbox state in `%APPDATA%\RadEdit\config.json`.
+
 ## Shipping Single-File (no bundled WebView2 runtime)
 
 Publish a single-file release that uses the installed WebView2 Evergreen Runtime:
@@ -57,6 +83,11 @@ The output is `bin\Release\net8.0-windows7.0\win-x64\publish\RadEdit.exe`. Make 
   - Title label (left)
   - Name label (center)
   - Bold/Italic/Underline buttons that operate on the current selection
+- Proofreading bar contains:
+  - Status label
+  - `Proof` toggle
+  - Provider selector (`LanguageTool` or `LLM (Qwen 9B)`)
+  - Prev/Next navigation, suggestion list, Apply, Ignore, and Check Now
 - Main editor surface is a standard `RichTextBox` with URL detection disabled and vertical scroll bars.
 
 ## WM_COPYDATA Commands
