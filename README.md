@@ -43,7 +43,7 @@ When integrating, call `/v2/check` with `language=fr` to force French rules.
 
 RadEdit can also use a local LM Studio model as an alternative proofreading engine. The built-in default targets:
 
-- Base URL: `http://10.0.0.149:1234`
+- Base URL: `https://llm.radedit.org`
 - Model: `qwen3.5-9b-claude-4.6-opus-reasoning-distilled-v2`
 
 The LLM path checks text sentence by sentence, asks for conservative grammar/spelling corrections only, and then converts the corrected sentence into the same per-issue UI used by LanguageTool so each suggestion can still be accepted or dismissed individually.
@@ -56,7 +56,7 @@ RadEdit persists the proofing engine settings in `%APPDATA%\RadEdit\proofing-set
 {
   "enabled": false,
   "provider": "LocalLlm",
-  "llmBaseUrl": "http://10.0.0.149:1234",
+  "llmBaseUrl": "https://llm.radedit.org",
   "llmModel": "qwen3.5-9b-claude-4.6-opus-reasoning-distilled-v2"
 }
 ```

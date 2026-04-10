@@ -16,6 +16,7 @@ Changes since the previous version:
 - Disabled runtime debug log writing by default, so HTML routing and LLM proofing no longer append to the debug log during normal RadEdit runs.
 - Changed first-run proofing defaults so `Proof` starts unchecked and the default proofing provider/model are the local Qwen 9B LM Studio path.
 - Added `%APPDATA%\RadEdit\config.json` to persist the main window size/position and the `Proof` checkbox state across launches.
+- Changed the default LM Studio endpoint to `https://llm.radedit.org` and auto-migrate persisted proofing settings that still point to the previous IP-based or HTTP defaults.
 
 ## v0.2.7 - 2026-03-17
 

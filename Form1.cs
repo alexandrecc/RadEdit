@@ -955,7 +955,9 @@ namespace RadEdit
         private const string HtmlLanguage = "fr-CA";
         private const string LanguageToolBaseUrl = "http://localhost:8081";
         private const string LanguageToolLanguage = "fr";
-        private const string DefaultLlmBaseUrl = "http://10.0.0.149:1234";
+        private const string DefaultLlmBaseUrl = "https://llm.radedit.org";
+        private const string LegacyDefaultLlmBaseUrl = "http://10.0.0.149:1234";
+        private const string LegacyDefaultLlmBaseUrlHttp = "http://llm.radedit.org";
         private const string DefaultLlmModel = "qwen3.5-9b-claude-4.6-opus-reasoning-distilled-v2";
         private const string LegacyGemmaDefaultLlmModel = "gemma-4-31b-it";
         private const int LanguageToolDebounceMs = 700;
@@ -1241,6 +1243,12 @@ namespace RadEdit
                 settings.Provider = string.IsNullOrWhiteSpace(loaded.Provider) ? settings.Provider : loaded.Provider;
                 settings.LlmBaseUrl = string.IsNullOrWhiteSpace(loaded.LlmBaseUrl) ? settings.LlmBaseUrl : loaded.LlmBaseUrl;
                 settings.LlmModel = string.IsNullOrWhiteSpace(loaded.LlmModel) ? settings.LlmModel : loaded.LlmModel;
+                if (string.Equals(settings.LlmBaseUrl, LegacyDefaultLlmBaseUrl, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(settings.LlmBaseUrl, LegacyDefaultLlmBaseUrlHttp, StringComparison.OrdinalIgnoreCase))
+                {
+                    settings.LlmBaseUrl = DefaultLlmBaseUrl;
+                    persistNormalizedSettings = true;
+                }
                 if (string.Equals(settings.LlmModel, LegacyGemmaDefaultLlmModel, StringComparison.Ordinal))
                 {
                     settings.LlmModel = DefaultLlmModel;
