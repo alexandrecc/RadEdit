@@ -39,18 +39,18 @@ Invoke-WebRequest -Uri "http://localhost:8081/v2/check" -Method Post -Body @{
 
 When integrating, call `/v2/check` with `language=fr` to force French rules.
 
-## Local LLM Proofreading (LM Studio)
+## Local LLM Proofreading
 
-RadEdit can also use a local LM Studio model as an alternative proofreading engine. The built-in default targets:
+RadEdit uses an OpenAI-compatible LLM server for proofreading. The built-in default targets:
 
 - Base URL: `https://llm.radedit.org`
 - Model: `qwen3.5-9b-claude-4.6-opus-reasoning-distilled-v2`
 
-The LLM path checks text sentence by sentence, asks for conservative grammar/spelling corrections only, and then converts the corrected sentence into the same per-issue UI used by LanguageTool so each suggestion can still be accepted or dismissed individually.
+The LLM path tracks trusted scaffold text inserted through `WM_COPYDATA`, recognizes `[]` placeholders as editable slots, and proofs only the affected local sentence or slot context after a user edit or dictation. Suggestions still surface as individual accept/ignore items inside RadEdit.
 
-On a first run with no saved settings, the `Proof` toggle starts unchecked and the default provider/model are `LLM (Qwen 9B)` with the LM Studio endpoint above.
+On a first run with no saved settings, the `Proof` toggle starts unchecked. On startup, RadEdit queries `/api/v1/models`, looks for the first model that already has a `loaded_instances` entry, and uses that model. If no model is already loaded on the server, RadEdit shows `No loaded model on server` beside `Proof` and does not try to load one itself.
 
-RadEdit persists the proofing engine settings in `%APPDATA%\RadEdit\proofing-settings.json`:
+RadEdit persists the proofing server settings in `%APPDATA%\RadEdit\proofing-settings.json`:
 
 ```json
 {
@@ -61,9 +61,11 @@ RadEdit persists the proofing engine settings in `%APPDATA%\RadEdit\proofing-set
 }
 ```
 
-If your LM Studio server or model id changes, edit that file and restart RadEdit.
+If your proofreading server changes, edit that file and restart RadEdit. RadEdit normalizes the saved server address to the current default format, persists the loaded model key internally, and shows the server's model display name in the toolbar when available.
 
 RadEdit persists the main window size/position and the `Proof` checkbox state in `%APPDATA%\RadEdit\config.json`.
+
+For the planned proofing refactor and target state, see [docs/proofing-architecture.md](docs/proofing-architecture.md).
 
 ## Shipping Single-File (no bundled WebView2 runtime)
 
@@ -83,12 +85,14 @@ The output is `bin\Release\net8.0-windows7.0\win-x64\publish\RadEdit.exe`. Make 
   - Title label (left)
   - Name label (center)
   - Bold/Italic/Underline buttons that operate on the current selection
-- Proofreading bar contains:
-  - Status label
-  - `Proof` toggle
-  - Provider selector (`LanguageTool` or `LLM (Qwen 9B)`)
-  - Prev/Next navigation, suggestion list, Apply, Ignore, and Check Now
-- Main editor surface is a standard `RichTextBox` with URL detection disabled and vertical scroll bars.
+- Proof controls contain:
+  - `Proof` toggle to the right of `Pop RTF`
+  - Read-only current model display or an availability message such as `No loaded model on server`
+  - Suggestion list, `Apply`, and `Ignore` on the lower bar
+- Proofreading shortcuts:
+  - Focused RadEdit: `F11` = Apply, `F12` = Ignore
+  - Global: `Ctrl+Alt+F11` = Apply, `Ctrl+Alt+F12` = Ignore
+- Main editor surface is a custom `RichTextBox` with URL detection disabled, proofreading highlights, an inactive caret indicator, and one-click focus/caret placement when RadEdit is inactive.
 
 ## WM_COPYDATA Commands
 
@@ -192,6 +196,8 @@ Run `examples\data-context-accents-demo.ahk` to verify accented characters (for 
 Run `examples\html-routing-setdatacontext-test.ahk` to load the HTML routing demo and send a richer `SetDataContext` payload that updates both HTML fields and RTF placeholders.
 
 Open `examples\html-datacontext-demo.html` in RadEdit to see HTML header seeding (`radedit:context`), `window.RadEdit.setDataContext` / `getDataContext`, and `window.RadEdit.updateView` in action. The launcher script `examples\html-datacontext-demo.ahk` loads it for you.
+
+Run `examples\proofing-slots-demo.ahk` to load a trusted `WM_COPYDATA` template with visible `[]` slots. Then click inside a slot and type or dictate manually to test the slot-aware proofreading behavior without re-correcting the scaffold text.
 
 ## HTML to RTF Routing
 

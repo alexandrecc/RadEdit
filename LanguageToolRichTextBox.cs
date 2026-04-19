@@ -10,7 +10,17 @@ namespace RadEdit
         private readonly List<TextRange> underlineRanges = new();
         private readonly Pen underlinePen = new(Color.FromArgb(255, 18, 18), 3f);
         private readonly Brush activeHighlightBrush = new SolidBrush(Color.FromArgb(90, 255, 120, 120));
+        private readonly Pen inactiveCaretPen = new(Color.FromArgb(220, 0, 120, 215), 2f);
         private TextRange? activeRange;
+
+        public LanguageToolRichTextBox()
+        {
+            SelectionChanged += (_, _) => Invalidate();
+            TextChanged += (_, _) => Invalidate();
+            GotFocus += (_, _) => Invalidate();
+            LostFocus += (_, _) => Invalidate();
+            Resize += (_, _) => Invalidate();
+        }
 
         public void SetUnderlineRanges(IEnumerable<TextRange> ranges)
         {
@@ -27,13 +37,28 @@ namespace RadEdit
 
         protected override void WndProc(ref Message m)
         {
+            const int WM_MOUSEACTIVATE = 0x0021;
+            if (m.Msg == WM_MOUSEACTIVATE && CanFocus && !Focused)
+            {
+                Focus();
+            }
+
             base.WndProc(ref m);
 
             const int WM_PAINT = 0x000F;
             const int WM_PRINTCLIENT = 0x0318;
+            const int WM_VSCROLL = 0x0115;
+            const int WM_HSCROLL = 0x0114;
+            const int WM_MOUSEWHEEL = 0x020A;
+
             if (m.Msg == WM_PAINT || m.Msg == WM_PRINTCLIENT)
             {
                 DrawUnderlines();
+            }
+
+            if ((m.Msg == WM_VSCROLL || m.Msg == WM_HSCROLL || m.Msg == WM_MOUSEWHEEL) && ShouldDrawInactiveCaret())
+            {
+                Invalidate();
             }
         }
 
@@ -43,6 +68,7 @@ namespace RadEdit
             {
                 underlinePen.Dispose();
                 activeHighlightBrush.Dispose();
+                inactiveCaretPen.Dispose();
             }
 
             base.Dispose(disposing);
@@ -50,13 +76,14 @@ namespace RadEdit
 
         private void DrawUnderlines()
         {
-            if (TextLength == 0)
+            using Graphics graphics = CreateGraphics();
+            int textLength = TextLength;
+            if (textLength == 0)
             {
+                DrawInactiveCaret(graphics, textLength);
                 return;
             }
 
-            using Graphics graphics = CreateGraphics();
-            int textLength = TextLength;
             int lineCount = Lines.Length;
 
             if (activeRange.HasValue)
@@ -111,6 +138,8 @@ namespace RadEdit
                     }
                 }
             }
+
+            DrawInactiveCaret(graphics, textLength);
         }
 
         private Point GetUnderlineEndPoint(int charIndex, int textLength)
@@ -167,6 +196,56 @@ namespace RadEdit
                     width + 2,
                     height);
             }
+        }
+
+        private void DrawInactiveCaret(Graphics graphics, int textLength)
+        {
+            if (!ShouldDrawInactiveCaret())
+            {
+                return;
+            }
+
+            Point caretPoint = GetInactiveCaretPoint(textLength);
+            int caretHeight = Math.Max(2, Font.Height);
+            int caretBottom = Math.Min(ClientRectangle.Height - 1, caretPoint.Y + caretHeight);
+
+            graphics.DrawLine(
+                inactiveCaretPen,
+                caretPoint.X,
+                caretPoint.Y,
+                caretPoint.X,
+                caretBottom);
+        }
+
+        private bool ShouldDrawInactiveCaret()
+        {
+            return !Focused &&
+                   Visible &&
+                   Enabled &&
+                   SelectionLength == 0;
+        }
+
+        private Point GetInactiveCaretPoint(int textLength)
+        {
+            int caretIndex = Math.Max(0, Math.Min(SelectionStart, textLength));
+            Point caretPoint = GetPositionFromCharIndex(caretIndex);
+
+            if (caretIndex == textLength && textLength > 0)
+            {
+                Point lastCharPoint = GetPositionFromCharIndex(textLength - 1);
+                if (caretPoint == lastCharPoint)
+                {
+                    char lastChar = Text[textLength - 1];
+                    if (lastChar != '\r' && lastChar != '\n')
+                    {
+                        caretPoint = GetUnderlineEndPoint(textLength, textLength);
+                    }
+                }
+            }
+
+            return new Point(
+                Math.Max(1, Math.Min(caretPoint.X, ClientRectangle.Width - 1)),
+                Math.Max(1, Math.Min(caretPoint.Y, Math.Max(1, ClientRectangle.Height - Font.Height))));
         }
     }
 }

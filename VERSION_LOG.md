@@ -1,5 +1,18 @@
 # Version Log
 
+## v0.2.9 - 2026-04-19
+
+Changes since the previous version:
+
+- Reworked proofreading around a stateful document model so trusted `WM_COPYDATA` scaffold text is not re-corrected, `[]` placeholders become tracked slots, and dictated text only proofs the relevant local sentence or slot context.
+- Added slot policies for `[]` placeholders so heading/title slots stay protected while sentence-embedded slots can still proof the surrounding sentence when that makes grammatical sense.
+- Reused unchanged LLM proofing units across edits and added stable in-memory dismissal keys so unchanged LLM suggestions no longer reappear immediately after being ignored.
+- Fixed proofreading apply behavior so popup applies leave the caret at the corrected text while toolbar and hotkey applies preserve the logical caret offset through the replacement.
+- Simplified the proofreading UI: `Proof` now lives next to `Pop RTF`, the current loaded model display sits beside it, only the suggestion list plus `Apply` and `Ignore` remain on the lower bar, and the old flickering status/provider/navigation controls are hidden.
+- Added focused proofreading hotkeys `F11` = Apply and `F12` = Ignore while keeping the existing global `Ctrl+Alt+F11` / `Ctrl+Alt+F12` hotkeys, and exposed both shortcut paths in the button tooltips.
+- Added runtime LLM model discovery from `/api/v1/models`, only use models that already report `loaded_instances`, show `No loaded model on server` when none are ready, retry discovery if the current model stops responding, and display the server's model `display_name` beside `Proof`.
+- Added proof-status availability text beside `Proof` for server/model failures and kept a visible inactive caret plus one-click activation/caret placement in the editor even when RadEdit is not focused.
+
 ## v0.2.8 - 2026-04-06
 
 Changes since the previous version:

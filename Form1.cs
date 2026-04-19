@@ -467,20 +467,6 @@ namespace RadEdit
             }
         }
 
-        private sealed class SentenceSegment
-        {
-            public SentenceSegment(int start, int length, string text)
-            {
-                Start = start;
-                Length = length;
-                Text = text;
-            }
-
-            public int Start { get; }
-            public int Length { get; }
-            public string Text { get; }
-        }
-
         private sealed class DiffToken
         {
             public DiffToken(string text, int start)
@@ -500,6 +486,24 @@ namespace RadEdit
             public int Length { get; set; }
             public string Message { get; set; } = string.Empty;
             public string Replacement { get; set; } = string.Empty;
+        }
+
+        private enum ProofingApplyCaretBehavior
+        {
+            MoveToReplacementEnd,
+            PreserveCaretOffset
+        }
+
+        private sealed class LlmProofUnitState
+        {
+            public LlmProofUnitState(ProofingUnit unit, List<SentenceIssueTemplate>? templates = null)
+            {
+                Unit = unit;
+                Templates = templates ?? new List<SentenceIssueTemplate>();
+            }
+
+            public ProofingUnit Unit { get; }
+            public List<SentenceIssueTemplate> Templates { get; }
         }
 
         private sealed class LanguageToolIssue
@@ -618,10 +622,12 @@ namespace RadEdit
         private sealed class LlmProofreadClient : IDisposable
         {
             private readonly record struct LlmCorrectionResponse(bool AgreementChanged, string? Corrected);
+            public readonly record struct LoadedLlmModel(string Id, string DisplayName);
 
             private readonly HttpClient httpClient;
-            private readonly Uri completionsUri;
-            private readonly string model;
+            private Uri completionsUri;
+            private Uri modelsUri;
+            private string model;
 
             public LlmProofreadClient(string baseUrl, string model)
             {
@@ -630,7 +636,54 @@ namespace RadEdit
                     Timeout = TimeSpan.FromSeconds(LanguageToolTimeoutSeconds)
                 };
                 completionsUri = BuildCompletionsUri(baseUrl);
-                this.model = string.IsNullOrWhiteSpace(model) ? DefaultLlmModel : model.Trim();
+                modelsUri = BuildModelsUri(baseUrl);
+                this.model = NormalizeModel(model);
+            }
+
+            public string Model => model;
+
+            public void UpdateConfiguration(string baseUrl, string model)
+            {
+                completionsUri = BuildCompletionsUri(baseUrl);
+                modelsUri = BuildModelsUri(baseUrl);
+                this.model = NormalizeModel(model);
+            }
+
+            public async Task<List<LoadedLlmModel>> GetLoadedModelsAsync(CancellationToken cancellationToken)
+            {
+                using var response = await httpClient.GetAsync(modelsUri, cancellationToken);
+                string rawResponse = await response.Content.ReadAsStringAsync(cancellationToken);
+                if (!response.IsSuccessStatusCode)
+                {
+                    throw new InvalidOperationException(
+                        $"LLM models HTTP {(int)response.StatusCode} {response.ReasonPhrase}. Body={FormatTextForLog(rawResponse)}");
+                }
+
+                using var doc = JsonDocument.Parse(rawResponse);
+                if (!TryGetModelArray(doc.RootElement, out JsonElement dataElement))
+                {
+                    throw new InvalidOperationException("LLM models response did not include a usable model array.");
+                }
+
+                var loadedModels = new List<LoadedLlmModel>();
+                foreach (JsonElement modelElement in dataElement.EnumerateArray())
+                {
+                    string fallbackDisplayName = GetModelDisplayName(modelElement);
+                    List<string> loadedInstanceIds = GetLoadedInstanceModelIds(modelElement);
+                    if (loadedInstanceIds.Count > 0)
+                    {
+                        foreach (string loadedInstanceId in loadedInstanceIds)
+                        {
+                            string normalizedId = NormalizeModel(loadedInstanceId);
+                            string displayName = string.IsNullOrWhiteSpace(fallbackDisplayName)
+                                ? normalizedId
+                                : fallbackDisplayName;
+                            AddUniqueModel(loadedModels, new LoadedLlmModel(normalizedId, displayName));
+                        }
+                    }
+                }
+
+                return loadedModels;
             }
 
             public async Task ProbeAsync(CancellationToken cancellationToken)
@@ -646,9 +699,11 @@ namespace RadEdit
                     return string.Empty;
                 }
 
+                Uri requestUri = completionsUri;
+                string requestModel = model;
                 var payload = new JsonObject
                 {
-                    ["model"] = model,
+                    ["model"] = requestModel,
                     ["prompt"] = BuildPrompt(sanitizedSentence),
                     ["temperature"] = 0,
                     ["stream"] = false,
@@ -656,7 +711,7 @@ namespace RadEdit
                 };
 
                 using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-                using var response = await httpClient.PostAsync(completionsUri, content, cancellationToken);
+                using var response = await httpClient.PostAsync(requestUri, content, cancellationToken);
                 string rawResponse = await response.Content.ReadAsStringAsync(cancellationToken);
                 if (!response.IsSuccessStatusCode)
                 {
@@ -681,7 +736,7 @@ namespace RadEdit
                 {
                     LogDebug(
                         "LLM returned unusable correction. "
-                        + "Model=" + model
+                        + "Model=" + requestModel
                         + " Sentence=" + FormatTextForLog(sanitizedSentence)
                         + " Raw=" + FormatTextForLog(raw));
                     return sanitizedSentence;
@@ -697,7 +752,7 @@ namespace RadEdit
                 {
                     LogDebug(
                         "LLM reported an agreement correction without usable corrected text. "
-                        + "Model=" + model
+                        + "Model=" + requestModel
                         + " Sentence=" + FormatTextForLog(sanitizedSentence)
                         + " Raw=" + FormatTextForLog(raw));
                     return sanitizedSentence;
@@ -711,7 +766,24 @@ namespace RadEdit
                 httpClient.Dispose();
             }
 
+            private static string NormalizeModel(string? configuredModel)
+            {
+                return string.IsNullOrWhiteSpace(configuredModel) ? DefaultLlmModel : configuredModel.Trim();
+            }
+
             private static Uri BuildCompletionsUri(string baseUrl)
+            {
+                string normalized = NormalizeBaseUrl(baseUrl);
+                return new Uri(normalized.TrimEnd('/') + "/v1/completions", UriKind.Absolute);
+            }
+
+            private static Uri BuildModelsUri(string baseUrl)
+            {
+                string normalized = NormalizeBaseUrl(baseUrl);
+                return new Uri(normalized.TrimEnd('/') + "/api/v1/models", UriKind.Absolute);
+            }
+
+            private static string NormalizeBaseUrl(string? baseUrl)
             {
                 string normalized = (baseUrl ?? string.Empty).Trim();
                 if (string.IsNullOrEmpty(normalized))
@@ -720,12 +792,217 @@ namespace RadEdit
                 }
 
                 normalized = normalized.TrimEnd('/');
-                if (!normalized.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
+                if (normalized.EndsWith("/api/v1", StringComparison.OrdinalIgnoreCase))
                 {
-                    normalized += "/v1";
+                    normalized = normalized.Substring(0, normalized.Length - 7).TrimEnd('/');
+                }
+                if (normalized.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
+                {
+                    normalized = normalized.Substring(0, normalized.Length - 3).TrimEnd('/');
                 }
 
-                return new Uri(normalized + "/completions", UriKind.Absolute);
+                return normalized;
+            }
+
+            private static bool TryGetModelArray(JsonElement rootElement, out JsonElement modelsArray)
+            {
+                if (rootElement.ValueKind == JsonValueKind.Array)
+                {
+                    modelsArray = rootElement;
+                    return true;
+                }
+
+                if (rootElement.ValueKind == JsonValueKind.Object)
+                {
+                    if (rootElement.TryGetProperty("data", out JsonElement dataElement) &&
+                        dataElement.ValueKind == JsonValueKind.Array)
+                    {
+                        modelsArray = dataElement;
+                        return true;
+                    }
+
+                    if (rootElement.TryGetProperty("models", out JsonElement modelsElement) &&
+                        modelsElement.ValueKind == JsonValueKind.Array)
+                    {
+                        modelsArray = modelsElement;
+                        return true;
+                    }
+                }
+
+                modelsArray = default;
+                return false;
+            }
+
+            private static bool TryGetModelId(JsonElement modelElement, out string? id)
+            {
+                id = null;
+                if (modelElement.ValueKind != JsonValueKind.Object)
+                {
+                    return false;
+                }
+
+                if (modelElement.TryGetProperty("id", out JsonElement idElement) &&
+                    idElement.ValueKind == JsonValueKind.String)
+                {
+                    id = idElement.GetString();
+                    return !string.IsNullOrWhiteSpace(id);
+                }
+
+                if (modelElement.TryGetProperty("name", out JsonElement nameElement) &&
+                    nameElement.ValueKind == JsonValueKind.String)
+                {
+                    id = nameElement.GetString();
+                    return !string.IsNullOrWhiteSpace(id);
+                }
+
+                if (modelElement.TryGetProperty("key", out JsonElement keyElement) &&
+                    keyElement.ValueKind == JsonValueKind.String)
+                {
+                    id = keyElement.GetString();
+                    return !string.IsNullOrWhiteSpace(id);
+                }
+
+                return false;
+            }
+
+            private static string GetModelDisplayName(JsonElement modelElement)
+            {
+                string displayName = GetStringModelProperty(modelElement, "display_name", "displayName", "label", "title");
+                if (!string.IsNullOrWhiteSpace(displayName))
+                {
+                    return displayName;
+                }
+
+                if (TryGetModelId(modelElement, out string? id) && !string.IsNullOrWhiteSpace(id))
+                {
+                    return id.Trim();
+                }
+
+                return string.Empty;
+            }
+
+            private static List<string> GetLoadedInstanceModelIds(JsonElement modelElement)
+            {
+                var loadedInstanceIds = new List<string>();
+                if (modelElement.ValueKind != JsonValueKind.Object ||
+                    !modelElement.TryGetProperty("loaded_instances", out JsonElement loadedInstancesElement) ||
+                    loadedInstancesElement.ValueKind != JsonValueKind.Array)
+                {
+                    return loadedInstanceIds;
+                }
+
+                foreach (JsonElement loadedInstance in loadedInstancesElement.EnumerateArray())
+                {
+                    if (loadedInstance.ValueKind != JsonValueKind.Object ||
+                        !loadedInstance.TryGetProperty("id", out JsonElement idElement) ||
+                        idElement.ValueKind != JsonValueKind.String)
+                    {
+                        continue;
+                    }
+
+                    string loadedInstanceId = idElement.GetString()?.Trim() ?? string.Empty;
+                    if (!string.IsNullOrWhiteSpace(loadedInstanceId))
+                    {
+                        AddUniqueModelId(loadedInstanceIds, loadedInstanceId);
+                    }
+                }
+
+                return loadedInstanceIds;
+            }
+
+            private static void AddUniqueModelId(List<string> models, string id)
+            {
+                foreach (string existing in models)
+                {
+                    if (string.Equals(existing, id, StringComparison.Ordinal))
+                    {
+                        return;
+                    }
+                }
+
+                models.Add(id);
+            }
+
+            private static void AddUniqueModel(List<LoadedLlmModel> models, LoadedLlmModel model)
+            {
+                foreach (LoadedLlmModel existing in models)
+                {
+                    if (string.Equals(existing.Id, model.Id, StringComparison.Ordinal))
+                    {
+                        return;
+                    }
+                }
+
+                models.Add(model);
+            }
+
+            private static bool IsTruthyModelFlag(JsonElement modelElement, params string[] propertyNames)
+            {
+                foreach (string propertyName in propertyNames)
+                {
+                    if (!modelElement.TryGetProperty(propertyName, out JsonElement propertyElement))
+                    {
+                        continue;
+                    }
+
+                    switch (propertyElement.ValueKind)
+                    {
+                        case JsonValueKind.True:
+                            return true;
+                        case JsonValueKind.False:
+                            return false;
+                        case JsonValueKind.Number:
+                            if (propertyElement.TryGetInt32(out int numericValue))
+                            {
+                                return numericValue != 0;
+                            }
+                            break;
+                        case JsonValueKind.String:
+                            string value = propertyElement.GetString()?.Trim() ?? string.Empty;
+                            if (value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+                                value.Equals("yes", StringComparison.OrdinalIgnoreCase) ||
+                                value.Equals("1", StringComparison.OrdinalIgnoreCase))
+                            {
+                                return true;
+                            }
+                            if (value.Equals("false", StringComparison.OrdinalIgnoreCase) ||
+                                value.Equals("no", StringComparison.OrdinalIgnoreCase) ||
+                                value.Equals("0", StringComparison.OrdinalIgnoreCase))
+                            {
+                                return false;
+                            }
+                            break;
+                    }
+                }
+
+                return false;
+            }
+
+            private static string GetStringModelProperty(JsonElement modelElement, params string[] propertyNames)
+            {
+                foreach (string propertyName in propertyNames)
+                {
+                    if (modelElement.TryGetProperty(propertyName, out JsonElement propertyElement) &&
+                        propertyElement.ValueKind == JsonValueKind.String)
+                    {
+                        return propertyElement.GetString()?.Trim() ?? string.Empty;
+                    }
+                }
+
+                return string.Empty;
+            }
+
+            private static bool IsReadyLikeState(string state)
+            {
+                return state.Equals("ready", StringComparison.OrdinalIgnoreCase) ||
+                       state.Equals("active", StringComparison.OrdinalIgnoreCase) ||
+                       state.Equals("loaded", StringComparison.OrdinalIgnoreCase);
+            }
+
+            private static bool IsLoadedLikeState(string state)
+            {
+                return state.Equals("loaded", StringComparison.OrdinalIgnoreCase) ||
+                       state.Equals("active", StringComparison.OrdinalIgnoreCase);
             }
 
             private static string BuildPrompt(string sentence)
@@ -959,6 +1236,7 @@ namespace RadEdit
         private const string LegacyDefaultLlmBaseUrl = "http://10.0.0.149:1234";
         private const string LegacyDefaultLlmBaseUrlHttp = "http://llm.radedit.org";
         private const string DefaultLlmModel = "qwen3.5-9b-claude-4.6-opus-reasoning-distilled-v2";
+        private const string NoLoadedLlmModelText = "No loaded model on server";
         private const string LegacyGemmaDefaultLlmModel = "gemma-4-31b-it";
         private const int LanguageToolDebounceMs = 700;
         private const int LanguageToolTimeoutSeconds = 25;
@@ -1024,6 +1302,7 @@ namespace RadEdit
         private AppConfig appConfig = new();
         private ProofingSettings proofingSettings = new();
         private ProofingProvider activeProofingProvider = ProofingProvider.LocalLlm;
+        private readonly ProofingDocumentState proofingDocumentState = new();
         private bool languageToolEnabled;
         private string languageToolStatusText = "ready";
         private bool languageToolBusy;
@@ -1031,7 +1310,17 @@ namespace RadEdit
         private readonly ContextMenuStrip languageToolHoverMenu = new();
         private LanguageToolIssue? languageToolHoverIssue;
         private readonly Dictionary<string, List<SentenceIssueTemplate>> llmSentenceIssueCache = new(StringComparer.Ordinal);
+        private readonly List<LlmProofUnitState> llmProofedUnitStates = new();
+        private readonly HashSet<string> dismissedLlmIssueKeys = new(StringComparer.Ordinal);
+        private ToolStripControlHost? proofToggleToolStripHost;
+        private readonly ToolStripLabel toolStripProofModelLabel = new();
+        private readonly ToolTip proofingActionToolTip = new();
+        private readonly SemaphoreSlim llmModelDiscoveryGate = new(1, 1);
         private bool suppressProofingProviderEvents;
+        private bool llmModelDiscoveryBusy;
+        private bool llmLoadedModelAvailable;
+        private readonly List<string> availableLlmModels = new();
+        private readonly Dictionary<string, string> availableLlmModelDisplayNames = new(StringComparer.Ordinal);
         private int suppressProofingForCopyDataDepth;
         private bool hotkeyApplyRegistered;
         private bool hotkeyIgnoreRegistered;
@@ -1050,7 +1339,8 @@ namespace RadEdit
             proofingSettings = LoadProofingSettings();
             appConfigPath = GetAppConfigPath();
             appConfig = LoadAppConfig(proofingSettings.Enabled);
-            activeProofingProvider = ParseProofingProvider(proofingSettings.Provider);
+            activeProofingProvider = ProofingProvider.LocalLlm;
+            proofingSettings.Provider = activeProofingProvider.ToString();
             languageToolEnabled = appConfig.ProofEnabled;
             ApplyWindowConfig();
             languageToolClient = new LanguageToolClient(LanguageToolBaseUrl);
@@ -1067,7 +1357,10 @@ namespace RadEdit
             languageToolHoverMenu.ShowCheckMargin = false;
             snippetMenu.ShowImageMargin = false;
             snippetMenu.ShowCheckMargin = false;
+            ConfigureProofingToolbarLayout();
             ConfigureProofingProviderCombo();
+            ConfigureProofingActionTooltips();
+            ConfigureLlmModelCombo();
             Text = $"RadEdit V{GetAppVersion()}";
             SetDefaultTypingFont("Arial", 10f);
             richTextBox1.SelectionChanged += RichTextBox1_SelectionChanged;
@@ -1078,6 +1371,7 @@ namespace RadEdit
             splitContainer1.SizeChanged += SplitContainer1_SizeChanged;
             LocationChanged += Form1_WindowPlacementChanged;
             SizeChanged += Form1_WindowPlacementChanged;
+            proofingDocumentState.Reset(richTextBox1.Text);
             lastPlainText = richTextBox1.Text;
             lastRtfSnapshot = richTextBox1.Rtf ?? string.Empty;
             UpdateFormattingButtons();
@@ -1085,6 +1379,54 @@ namespace RadEdit
             checkBoxLtEnabled.Checked = languageToolEnabled;
             UpdateLanguageToolStatus(languageToolEnabled ? languageToolStatusText : "disabled");
             UpdateLanguageToolBarState();
+        }
+
+        private void ConfigureProofingToolbarLayout()
+        {
+            labelLtStatus.Visible = false;
+            comboLtProvider.Visible = false;
+            comboLtModel.Visible = false;
+            buttonLtPrev.Visible = false;
+            buttonLtNext.Visible = false;
+            buttonLtCheck.Visible = false;
+
+            if (checkBoxLtEnabled.Parent != null)
+            {
+                checkBoxLtEnabled.Parent.Controls.Remove(checkBoxLtEnabled);
+            }
+
+            checkBoxLtEnabled.Margin = new Padding(0, 2, 0, 0);
+            checkBoxLtEnabled.AutoSize = true;
+            checkBoxLtEnabled.BackColor = Color.Transparent;
+
+            if (proofToggleToolStripHost == null)
+            {
+                proofToggleToolStripHost = new ToolStripControlHost(checkBoxLtEnabled)
+                {
+                    Margin = new Padding(12, 1, 6, 1),
+                    Padding = Padding.Empty,
+                    AutoSize = false,
+                    Size = new Size(60, 24)
+                };
+
+                toolStripProofModelLabel.Margin = new Padding(0, 1, 0, 2);
+                toolStripProofModelLabel.AutoSize = false;
+                toolStripProofModelLabel.Size = new Size(240, 24);
+                toolStripProofModelLabel.TextAlign = ContentAlignment.MiddleLeft;
+                toolStripProofModelLabel.ToolTipText = "Current LLM model";
+
+                int insertIndex = toolStripButtons.Items.IndexOf(toolStripPopRtfButton) + 1;
+                toolStripButtons.Items.Insert(insertIndex, proofToggleToolStripHost);
+                toolStripButtons.Items.Insert(insertIndex + 1, toolStripProofModelLabel);
+            }
+
+            flowLtBar.Controls.Clear();
+            comboLtSuggestions.Margin = new Padding(0, 0, 10, 0);
+            buttonLtApply.Margin = new Padding(0, 0, 10, 0);
+            buttonLtIgnore.Margin = new Padding(0, 0, 0, 0);
+            flowLtBar.Controls.Add(comboLtSuggestions);
+            flowLtBar.Controls.Add(buttonLtApply);
+            flowLtBar.Controls.Add(buttonLtIgnore);
         }
 
         private void ConfigureProofingProviderCombo()
@@ -1095,7 +1437,7 @@ namespace RadEdit
             {
                 comboLtProvider.Items.Clear();
                 comboLtProvider.Items.Add("LanguageTool");
-                comboLtProvider.Items.Add("LLM (Qwen 9B)");
+                comboLtProvider.Items.Add("LLM");
                 comboLtProvider.SelectedIndex = activeProofingProvider == ProofingProvider.LocalLlm ? 1 : 0;
             }
             finally
@@ -1104,6 +1446,71 @@ namespace RadEdit
             }
 
             comboLtProvider.SelectedIndexChanged += ComboLtProvider_SelectedIndexChanged;
+        }
+
+        private void ConfigureLlmModelCombo()
+        {
+            comboLtModel.Items.Clear();
+            string selectedModel = llmLoadedModelAvailable
+                ? GetCurrentLlmModelDisplayName()
+                : NoLoadedLlmModelText;
+            comboLtModel.Items.Add(selectedModel);
+            comboLtModel.SelectedIndex = 0;
+            UpdateProofAvailabilityDisplay();
+        }
+
+        private void UpdateProofAvailabilityDisplay()
+        {
+            bool showAvailability = languageToolEnabled;
+            toolStripProofModelLabel.Visible = showAvailability;
+
+            string displayText = showAvailability ? GetProofAvailabilityDisplayText() : string.Empty;
+            toolStripProofModelLabel.Text = displayText;
+            toolStripProofModelLabel.ToolTipText = displayText;
+        }
+
+        private string GetProofAvailabilityDisplayText()
+        {
+            if (!llmLoadedModelAvailable)
+            {
+                return NoLoadedLlmModelText;
+            }
+
+            if (languageToolOffline || string.Equals(languageToolStatusText, "offline", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Server offline";
+            }
+
+            if (string.Equals(languageToolStatusText, "timeout", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Server timeout";
+            }
+
+            if (string.Equals(languageToolStatusText, "error", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Model unavailable";
+            }
+
+            return GetCurrentLlmModelDisplayName();
+        }
+
+        private string GetCurrentLlmModelDisplayName()
+        {
+            string modelKey = NormalizeLlmModel(proofingSettings.LlmModel);
+            return availableLlmModelDisplayNames.TryGetValue(modelKey, out string? displayName) &&
+                   !string.IsNullOrWhiteSpace(displayName)
+                ? displayName
+                : modelKey;
+        }
+
+        private void ConfigureProofingActionTooltips()
+        {
+            proofingActionToolTip.SetToolTip(
+                buttonLtApply,
+                "Focused: F11\r\nGlobal: Ctrl+Alt+F11");
+            proofingActionToolTip.SetToolTip(
+                buttonLtIgnore,
+                "Focused: F12\r\nGlobal: Ctrl+Alt+F12");
         }
 
         private void ComboLtProvider_SelectedIndexChanged(object? sender, EventArgs e)
@@ -1118,6 +1525,127 @@ namespace RadEdit
                 : ProofingProvider.LanguageTool;
 
             SetActiveProofingProvider(selectedProvider);
+        }
+
+        private async Task InitializeLlmModelStateAsync(bool rerunProofing = false)
+        {
+            if (IsDisposed || Disposing || isClosing || activeProofingProvider != ProofingProvider.LocalLlm)
+            {
+                ConfigureLlmModelCombo();
+                UpdateLanguageToolBarState();
+                return;
+            }
+
+            try
+            {
+                using var discoveryCts = new CancellationTokenSource(TimeSpan.FromSeconds(LanguageToolStartupProbeTimeoutSeconds));
+                await RefreshLlmModelsAsync(discoveryCts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (HttpRequestException)
+            {
+                return;
+            }
+            catch (InvalidOperationException ex)
+            {
+                LogDebug("LLM model discovery error: " + ex.Message);
+                return;
+            }
+
+            if (!llmLoadedModelAvailable)
+            {
+                if (languageToolEnabled && activeProofingProvider == ProofingProvider.LocalLlm)
+                {
+                    UpdateLanguageToolStatus(NoLoadedLlmModelText);
+                    ClearLanguageToolIssues(true);
+                }
+
+                return;
+            }
+
+            if (rerunProofing &&
+                languageToolEnabled &&
+                activeProofingProvider == ProofingProvider.LocalLlm &&
+                !string.IsNullOrWhiteSpace(richTextBox1.Text))
+            {
+                ScheduleLanguageToolCheck(richTextBox1.Text, true);
+            }
+        }
+
+        private async Task RefreshLlmModelsAsync(CancellationToken cancellationToken)
+        {
+            await llmModelDiscoveryGate.WaitAsync(cancellationToken);
+            try
+            {
+                llmModelDiscoveryBusy = true;
+                UpdateLanguageToolBarState();
+
+                string baseUrl = NormalizeLlmBaseUrl(proofingSettings.LlmBaseUrl);
+                string previousModel = NormalizeLlmModel(proofingSettings.LlmModel);
+                bool previousLoadedModelAvailable = llmLoadedModelAvailable;
+                string selectedModel = previousModel;
+
+                proofingSettings.LlmBaseUrl = baseUrl;
+                proofingSettings.LlmModel = previousModel;
+                llmProofreadClient.UpdateConfiguration(baseUrl, selectedModel);
+
+                List<LlmProofreadClient.LoadedLlmModel> loadedModels = await llmProofreadClient.GetLoadedModelsAsync(cancellationToken);
+                availableLlmModels.Clear();
+                availableLlmModelDisplayNames.Clear();
+                foreach (LlmProofreadClient.LoadedLlmModel loadedModel in loadedModels)
+                {
+                    availableLlmModels.Add(loadedModel.Id);
+                    availableLlmModelDisplayNames[loadedModel.Id] = loadedModel.DisplayName;
+                }
+
+                llmLoadedModelAvailable = availableLlmModels.Count > 0;
+                if (llmLoadedModelAvailable)
+                {
+                    selectedModel = availableLlmModels[0];
+                    proofingSettings.LlmModel = selectedModel;
+                    llmProofreadClient.UpdateConfiguration(baseUrl, selectedModel);
+                }
+                else
+                {
+                    selectedModel = string.Empty;
+                }
+
+                bool modelChanged = llmLoadedModelAvailable &&
+                    !string.Equals(previousModel, selectedModel, StringComparison.Ordinal);
+                bool availabilityChanged = previousLoadedModelAvailable != llmLoadedModelAvailable;
+                if (modelChanged || availabilityChanged)
+                {
+                    ResetLlmProofingState(clearVisibleIssues: activeProofingProvider == ProofingProvider.LocalLlm);
+                }
+
+                ConfigureLlmModelCombo();
+                SaveProofingSettings();
+            }
+            finally
+            {
+                llmModelDiscoveryBusy = false;
+                UpdateLanguageToolBarState();
+                llmModelDiscoveryGate.Release();
+            }
+        }
+
+        private void ResetLlmProofingState(bool clearVisibleIssues)
+        {
+            llmSentenceIssueCache.Clear();
+            llmProofedUnitStates.Clear();
+            dismissedLlmIssueKeys.Clear();
+            pendingLanguageToolText = string.Empty;
+            lastLanguageToolText = string.Empty;
+
+            if (!clearVisibleIssues)
+            {
+                return;
+            }
+
+            ClearLanguageToolIssues(true);
         }
 
         private void SetActiveProofingProvider(ProofingProvider provider)
@@ -1139,19 +1667,39 @@ namespace RadEdit
 
             proofingSettings.Provider = activeProofingProvider.ToString();
             SaveProofingSettings();
+            ConfigureLlmModelCombo();
+            UpdateLanguageToolBarState();
 
             if (!languageToolEnabled)
             {
+                if (activeProofingProvider == ProofingProvider.LocalLlm)
+                {
+                    _ = InitializeLlmModelStateAsync();
+                }
                 return;
             }
 
-            if (string.IsNullOrWhiteSpace(richTextBox1.Text))
+            if (activeProofingProvider == ProofingProvider.LocalLlm)
             {
-                _ = ProbeProofingStatusAsync();
+                if (string.IsNullOrWhiteSpace(richTextBox1.Text))
+                {
+                    _ = ProbeProofingStatusAsync();
+                }
+                else
+                {
+                    _ = InitializeLlmModelStateAsync(rerunProofing: true);
+                }
             }
             else
             {
-                ScheduleLanguageToolCheck(richTextBox1.Text, true);
+                if (string.IsNullOrWhiteSpace(richTextBox1.Text))
+                {
+                    _ = ProbeProofingStatusAsync();
+                }
+                else
+                {
+                    ScheduleLanguageToolCheck(richTextBox1.Text, true);
+                }
             }
         }
 
@@ -1164,6 +1712,28 @@ namespace RadEdit
             }
 
             return ProofingProvider.LocalLlm;
+        }
+
+        private static string NormalizeLlmBaseUrl(string? baseUrl)
+        {
+            string normalized = (baseUrl ?? string.Empty).Trim();
+            if (string.IsNullOrEmpty(normalized))
+            {
+                normalized = DefaultLlmBaseUrl;
+            }
+
+            normalized = normalized.TrimEnd('/');
+            if (normalized.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
+            {
+                normalized = normalized.Substring(0, normalized.Length - 3).TrimEnd('/');
+            }
+
+            return normalized;
+        }
+
+        private static string NormalizeLlmModel(string? model)
+        {
+            return string.IsNullOrWhiteSpace(model) ? DefaultLlmModel : model.Trim();
         }
 
         private static string GetAppConfigPath()
@@ -1255,6 +1825,20 @@ namespace RadEdit
                     persistNormalizedSettings = true;
                 }
 
+                string normalizedBaseUrl = NormalizeLlmBaseUrl(settings.LlmBaseUrl);
+                if (!string.Equals(normalizedBaseUrl, settings.LlmBaseUrl, StringComparison.Ordinal))
+                {
+                    settings.LlmBaseUrl = normalizedBaseUrl;
+                    persistNormalizedSettings = true;
+                }
+
+                string normalizedModel = NormalizeLlmModel(settings.LlmModel);
+                if (!string.Equals(normalizedModel, settings.LlmModel, StringComparison.Ordinal))
+                {
+                    settings.LlmModel = normalizedModel;
+                    persistNormalizedSettings = true;
+                }
+
                 if (persistNormalizedSettings)
                 {
                     TryWriteProofingSettingsSnapshot(proofingSettingsPath, settings);
@@ -1296,12 +1880,8 @@ namespace RadEdit
         {
             proofingSettings.Enabled = languageToolEnabled;
             proofingSettings.Provider = activeProofingProvider.ToString();
-            proofingSettings.LlmBaseUrl = string.IsNullOrWhiteSpace(proofingSettings.LlmBaseUrl)
-                ? DefaultLlmBaseUrl
-                : proofingSettings.LlmBaseUrl;
-            proofingSettings.LlmModel = string.IsNullOrWhiteSpace(proofingSettings.LlmModel)
-                ? DefaultLlmModel
-                : proofingSettings.LlmModel;
+            proofingSettings.LlmBaseUrl = NormalizeLlmBaseUrl(proofingSettings.LlmBaseUrl);
+            proofingSettings.LlmModel = NormalizeLlmModel(proofingSettings.LlmModel);
 
             try
             {
@@ -1466,6 +2046,23 @@ namespace RadEdit
             base.WndProc(ref m);
         }
 
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            if (languageToolEnabled && keyData == Keys.F11)
+            {
+                ApplyActiveIssueFromHotkey();
+                return true;
+            }
+
+            if (languageToolEnabled && keyData == Keys.F12)
+            {
+                IgnoreActiveIssueFromHotkey();
+                return true;
+            }
+
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
@@ -1481,7 +2078,15 @@ namespace RadEdit
         protected override void OnShown(EventArgs e)
         {
             base.OnShown(e);
-            _ = ProbeProofingStatusAsync();
+            if (activeProofingProvider == ProofingProvider.LocalLlm)
+            {
+                _ = InitializeLlmModelStateAsync();
+            }
+
+            if (languageToolEnabled)
+            {
+                _ = ProbeProofingStatusAsync();
+            }
         }
 
         private bool HandleCopyDataCommand(CopyDataCommand command, string payload, IntPtr senderHandle)
@@ -3319,9 +3924,7 @@ namespace RadEdit
 
             if (allowRtfUpdatesWhileHtmlFocus || !IsHtmlMirroringAvailable())
             {
-                lastPlainText = newText;
-                lastRtfSnapshot = richTextBox1.Rtf ?? string.Empty;
-                ScheduleLanguageToolCheck(newText);
+                HandleEditableProofingTextChanged(newText);
                 return;
             }
 
@@ -3359,14 +3962,21 @@ namespace RadEdit
             }
             else
             {
-                lastPlainText = newText;
-                lastRtfSnapshot = richTextBox1.Rtf ?? string.Empty;
-                ScheduleLanguageToolCheck(newText);
+                HandleEditableProofingTextChanged(newText);
             }
+        }
+
+        private void HandleEditableProofingTextChanged(string newText)
+        {
+            proofingDocumentState.ApplyChange(newText, ProofingChangeSource.UserEdit);
+            lastPlainText = newText;
+            lastRtfSnapshot = richTextBox1.Rtf ?? string.Empty;
+            ScheduleLanguageToolCheck(newText);
         }
 
         private void HandleCopyDataProofingBypass(string newText)
         {
+            proofingDocumentState.ApplyChange(newText, ProofingChangeSource.TrustedAutomation);
             languageToolTimer.Stop();
             CancelLanguageToolCts();
             languageToolBusy = false;
@@ -3542,6 +4152,15 @@ namespace RadEdit
                 using var probeCts = new CancellationTokenSource(TimeSpan.FromSeconds(LanguageToolStartupProbeTimeoutSeconds));
                 if (activeProofingProvider == ProofingProvider.LocalLlm)
                 {
+                    await RefreshLlmModelsAsync(probeCts.Token);
+                    if (!llmLoadedModelAvailable)
+                    {
+                        languageToolOffline = false;
+                        UpdateLanguageToolStatus(NoLoadedLlmModelText);
+                        ClearLanguageToolIssues(true);
+                        return;
+                    }
+
                     await llmProofreadClient.ProbeAsync(probeCts.Token);
                 }
                 else
@@ -3666,12 +4285,27 @@ namespace RadEdit
             UpdateLanguageToolStatus("checking...");
 
             string snapshot = text;
+            if (!proofingDocumentState.HasProofableContent(snapshot))
+            {
+                llmProofedUnitStates.Clear();
+                lastLanguageToolText = snapshot;
+                SetLanguageToolIssues(new List<LanguageToolIssue>());
+                return;
+            }
 
             try
             {
                 List<LanguageToolIssue> issues = activeProofingProvider == ProofingProvider.LocalLlm
-                    ? await RunLlmProofreadIssuesAsync(snapshot, languageToolCts.Token)
+                    ? await RunLlmProofreadIssuesWithRecoveryAsync(snapshot, languageToolCts.Token)
                     : await languageToolClient.CheckAsync(snapshot, LanguageToolLanguage, languageToolCts.Token);
+
+                if (activeProofingProvider == ProofingProvider.LocalLlm && !llmLoadedModelAvailable)
+                {
+                    languageToolOffline = false;
+                    UpdateLanguageToolStatus(NoLoadedLlmModelText);
+                    ClearLanguageToolIssues(true);
+                    return;
+                }
 
                 languageToolOffline = false;
                 if (!string.Equals(snapshot, richTextBox1.Text, StringComparison.Ordinal))
@@ -3682,7 +4316,7 @@ namespace RadEdit
                 }
 
                 lastLanguageToolText = snapshot;
-                SetLanguageToolIssues(FilterIgnoredIssues(issues));
+                SetLanguageToolIssues(FilterIgnoredIssues(FilterProtectedIssues(issues)));
             }
             catch (TaskCanceledException)
             {
@@ -3713,42 +4347,154 @@ namespace RadEdit
             }
         }
 
-        private async Task<List<LanguageToolIssue>> RunLlmProofreadIssuesAsync(string text, CancellationToken cancellationToken)
+        private async Task<List<LanguageToolIssue>> RunLlmProofreadIssuesWithRecoveryAsync(string text, CancellationToken cancellationToken)
         {
-            var results = new List<LanguageToolIssue>();
-            List<SentenceSegment> segments = SplitIntoSentenceSegments(text);
-            if (segments.Count == 0)
+            try
             {
-                return results;
+                return await RunLlmProofreadIssuesAsync(text, cancellationToken);
+            }
+            catch (InvalidOperationException ex)
+            {
+                if (!await TryRecoverUnavailableLlmModelAsync(cancellationToken, ex))
+                {
+                    throw;
+                }
             }
 
-            for (int i = 0; i < segments.Count; i++)
+            cancellationToken.ThrowIfCancellationRequested();
+            return await RunLlmProofreadIssuesAsync(text, cancellationToken);
+        }
+
+        private async Task<bool> TryRecoverUnavailableLlmModelAsync(
+            CancellationToken cancellationToken,
+            InvalidOperationException originalException)
+        {
+            if (activeProofingProvider != ProofingProvider.LocalLlm || isClosing || IsDisposed || Disposing)
+            {
+                return false;
+            }
+
+            string previousModel = llmProofreadClient.Model;
+            LogDebug("LLM proofing failed for model " + previousModel + ". Attempting recovery. Error=" + originalException.Message);
+
+            try
+            {
+                UpdateLanguageToolStatus("recovering model...");
+                await RefreshLlmModelsAsync(cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception recoveryException) when (recoveryException is InvalidOperationException || recoveryException is HttpRequestException)
+            {
+                LogDebug("LLM model recovery failed: " + recoveryException.Message);
+                return false;
+            }
+
+            string recoveredModel = llmProofreadClient.Model;
+            if (!llmLoadedModelAvailable)
+            {
+                LogDebug("LLM model recovery found no loaded model on server.");
+                UpdateLanguageToolStatus(NoLoadedLlmModelText);
+                return true;
+            }
+
+            if (string.Equals(previousModel, recoveredModel, StringComparison.Ordinal))
+            {
+                LogDebug("LLM model recovery found no alternate model. Current model remains " + recoveredModel + ".");
+                return false;
+            }
+
+            LogDebug("LLM model recovery switched from " + previousModel + " to " + recoveredModel + ".");
+            UpdateLanguageToolStatus("checking...");
+            return true;
+        }
+
+        private async Task<List<LanguageToolIssue>> RunLlmProofreadIssuesAsync(string text, CancellationToken cancellationToken)
+        {
+            if (!llmLoadedModelAvailable)
+            {
+                llmProofedUnitStates.Clear();
+                return new List<LanguageToolIssue>();
+            }
+
+            List<ProofingUnit> units = proofingDocumentState.BuildLlmProofingUnits();
+            if (units.Count == 0)
+            {
+                llmProofedUnitStates.Clear();
+                return new List<LanguageToolIssue>();
+            }
+
+            List<LlmProofUnitState> nextStates = BuildLlmProofUnitSkeleton(units);
+            int prefix = 0;
+            while (prefix < llmProofedUnitStates.Count &&
+                   prefix < nextStates.Count &&
+                   CanReuseLlmProofUnitState(llmProofedUnitStates[prefix], nextStates[prefix]))
+            {
+                nextStates[prefix] = ReuseLlmProofUnitState(llmProofedUnitStates[prefix], nextStates[prefix].Unit);
+                prefix++;
+            }
+
+            int suffix = 0;
+            int maxSuffix = Math.Min(llmProofedUnitStates.Count - prefix, nextStates.Count - prefix);
+            while (suffix < maxSuffix)
+            {
+                int oldIndex = llmProofedUnitStates.Count - 1 - suffix;
+                int newIndex = nextStates.Count - 1 - suffix;
+                if (!CanReuseLlmProofUnitState(llmProofedUnitStates[oldIndex], nextStates[newIndex]))
+                {
+                    break;
+                }
+
+                nextStates[newIndex] = ReuseLlmProofUnitState(llmProofedUnitStates[oldIndex], nextStates[newIndex].Unit);
+                suffix++;
+            }
+
+            int dirtyStart = prefix;
+            int dirtyEndExclusive = nextStates.Count - suffix;
+            int totalProofableDirty = 0;
+            for (int i = dirtyStart; i < dirtyEndExclusive; i++)
+            {
+                if (!ShouldSkipLlmSegment(nextStates[i].Unit.Text))
+                {
+                    totalProofableDirty++;
+                }
+            }
+
+            int proofableDirtyIndex = 0;
+            for (int i = dirtyStart; i < dirtyEndExclusive; i++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                SentenceSegment segment = segments[i];
-                if (ShouldSkipLlmSegment(segment.Text))
+                LlmProofUnitState state = nextStates[i];
+                ProofingUnit unit = state.Unit;
+                if (ShouldSkipLlmSegment(unit.Text))
                 {
-                    llmSentenceIssueCache[segment.Text] = new List<SentenceIssueTemplate>();
+                    llmSentenceIssueCache[unit.Text] = new List<SentenceIssueTemplate>();
+                    nextStates[i] = new LlmProofUnitState(unit);
                     continue;
                 }
 
-                if (!llmSentenceIssueCache.TryGetValue(segment.Text, out List<SentenceIssueTemplate>? templates))
+                proofableDirtyIndex++;
+                if (!llmSentenceIssueCache.TryGetValue(unit.Text, out List<SentenceIssueTemplate>? templates))
                 {
-                    UpdateLanguageToolStatus($"checking {i + 1}/{segments.Count}...");
+                    UpdateLanguageToolStatus($"checking {proofableDirtyIndex}/{Math.Max(1, totalProofableDirty)}...");
 
-                    string corrected = await llmProofreadClient.CorrectSentenceAsync(segment.Text, cancellationToken);
+                    string corrected = await llmProofreadClient.CorrectSentenceAsync(unit.Text, cancellationToken);
                     LogDebug(
                         "LLM response received. "
-                        + "Segment=" + FormatTextForLog(segment.Text)
+                        + "Unit=" + unit.Kind
+                        + " Text=" + FormatTextForLog(unit.Text)
                         + " Corrected=" + FormatTextForLog(corrected)
-                        + " Changed=" + (!string.Equals(segment.Text, corrected, StringComparison.Ordinal)));
-                    templates = BuildSentenceIssueTemplates(segment.Text, corrected);
+                        + " Changed=" + (!string.Equals(unit.Text, corrected, StringComparison.Ordinal)));
+                    templates = BuildSentenceIssueTemplates(unit.Text, corrected);
                     if (templates.Count > 0)
                     {
                         LogDebug(
                             "LLM suggestions generated. "
-                            + "Segment=" + FormatTextForLog(segment.Text)
+                            + "Unit=" + unit.Kind
+                            + " Text=" + FormatTextForLog(unit.Text)
                             + " Corrected=" + FormatTextForLog(corrected)
                             + " Suggestions=" + string.Join(
                                 " | ",
@@ -3756,21 +4502,102 @@ namespace RadEdit
                                     $"[{template.Offset},{template.Length}]=>{FormatTextForLog(template.Replacement)}")));
                     }
 
-                    llmSentenceIssueCache[segment.Text] = templates;
+                    llmSentenceIssueCache[unit.Text] = templates;
                 }
 
-                foreach (SentenceIssueTemplate template in templates)
+                nextStates[i] = new LlmProofUnitState(unit, CloneSentenceTemplates(templates));
+            }
+
+            llmProofedUnitStates.Clear();
+            llmProofedUnitStates.AddRange(nextStates);
+            return BuildLlmIssuesFromStates(nextStates);
+        }
+
+        private List<LanguageToolIssue> BuildLlmIssuesFromStates(List<LlmProofUnitState> states)
+        {
+            var results = new List<LanguageToolIssue>();
+            foreach (LlmProofUnitState state in states)
+            {
+                if (state.Templates.Count == 0)
                 {
+                    continue;
+                }
+
+                foreach (SentenceIssueTemplate template in state.Templates)
+                {
+                    int issueOffset = state.Unit.Start + template.Offset;
+                    if (proofingDocumentState.IntersectsProtectedRange(issueOffset, template.Length))
+                    {
+                        continue;
+                    }
+
+                    string issueKey = BuildLlmIssueKey(state.Unit.Text, template);
+                    if (dismissedLlmIssueKeys.Contains(issueKey))
+                    {
+                        continue;
+                    }
+
                     results.Add(new LanguageToolIssue(
-                        segment.Start + template.Offset,
+                        issueOffset,
                         template.Length,
                         template.Message,
-                        string.Empty,
+                        "llm:" + issueKey,
                         new List<string> { template.Replacement }));
                 }
             }
 
             return results;
+        }
+
+        private static bool CanReuseLlmProofUnitState(LlmProofUnitState previous, LlmProofUnitState current)
+        {
+            return previous.Unit.Kind == current.Unit.Kind &&
+                   string.Equals(previous.Unit.Text, current.Unit.Text, StringComparison.Ordinal);
+        }
+
+        private static LlmProofUnitState ReuseLlmProofUnitState(LlmProofUnitState previous, ProofingUnit currentUnit)
+        {
+            return new LlmProofUnitState(currentUnit, CloneSentenceTemplates(previous.Templates));
+        }
+
+        private static List<LlmProofUnitState> BuildLlmProofUnitSkeleton(List<ProofingUnit> units)
+        {
+            var states = new List<LlmProofUnitState>(units.Count);
+            foreach (ProofingUnit unit in units)
+            {
+                states.Add(new LlmProofUnitState(unit));
+            }
+
+            return states;
+        }
+
+        private static List<SentenceIssueTemplate> CloneSentenceTemplates(List<SentenceIssueTemplate> templates)
+        {
+            var clone = new List<SentenceIssueTemplate>(templates.Count);
+            foreach (SentenceIssueTemplate template in templates)
+            {
+                clone.Add(new SentenceIssueTemplate
+                {
+                    Offset = template.Offset,
+                    Length = template.Length,
+                    Message = template.Message,
+                    Replacement = template.Replacement
+                });
+            }
+
+            return clone;
+        }
+
+        private static string BuildLlmIssueKey(string segmentText, SentenceIssueTemplate template)
+        {
+            return string.Concat(
+                segmentText ?? string.Empty,
+                "\u001f",
+                template.Offset.ToString(CultureInfo.InvariantCulture),
+                "\u001f",
+                template.Length.ToString(CultureInfo.InvariantCulture),
+                "\u001f",
+                template.Replacement ?? string.Empty);
         }
 
         private static bool ShouldSkipLlmSegment(string text)
@@ -3814,112 +4641,6 @@ namespace RadEdit
 
             int wordCount = Regex.Matches(trimmed, @"[\p{L}\p{N}]+", RegexOptions.CultureInvariant).Count;
             return wordCount > 0 && wordCount <= 12 && trimmed.Length <= 120;
-        }
-
-        private static List<SentenceSegment> SplitIntoSentenceSegments(string text)
-        {
-            var segments = new List<SentenceSegment>();
-            if (string.IsNullOrWhiteSpace(text))
-            {
-                return segments;
-            }
-
-            int segmentStart = -1;
-            for (int i = 0; i < text.Length; i++)
-            {
-                char current = text[i];
-                if (segmentStart < 0)
-                {
-                    if (char.IsWhiteSpace(current))
-                    {
-                        continue;
-                    }
-
-                    segmentStart = i;
-                }
-
-                bool atBoundary = IsSentenceBoundary(text, i);
-                bool atEnd = i == text.Length - 1;
-                if (!atBoundary && !atEnd)
-                {
-                    continue;
-                }
-
-                int endExclusive = atBoundary ? ExtendSentenceBoundaryEnd(text, i + 1) : i + 1;
-                int trimmedEnd = endExclusive;
-                while (trimmedEnd > segmentStart && char.IsWhiteSpace(text[trimmedEnd - 1]))
-                {
-                    trimmedEnd--;
-                }
-
-                if (trimmedEnd > segmentStart)
-                {
-                    segments.Add(new SentenceSegment(
-                        segmentStart,
-                        trimmedEnd - segmentStart,
-                        text.Substring(segmentStart, trimmedEnd - segmentStart)));
-                }
-
-                segmentStart = -1;
-                i = Math.Max(i, endExclusive - 1);
-            }
-
-            if (segmentStart >= 0 && segmentStart < text.Length)
-            {
-                string tail = text.Substring(segmentStart).TrimEnd();
-                if (!string.IsNullOrWhiteSpace(tail))
-                {
-                    segments.Add(new SentenceSegment(segmentStart, tail.Length, tail));
-                }
-            }
-
-            return segments;
-        }
-
-        private static bool IsSentenceBoundary(string text, int index)
-        {
-            char current = text[index];
-            if (current == '\r')
-            {
-                return true;
-            }
-
-            if (current == '\n')
-            {
-                return true;
-            }
-
-            if (current != '.' && current != '!' && current != '?')
-            {
-                return false;
-            }
-
-            int next = index + 1;
-            if (next >= text.Length)
-            {
-                return true;
-            }
-
-            char nextChar = text[next];
-            return char.IsWhiteSpace(nextChar) || nextChar == '"' || nextChar == '\'' || nextChar == ')' || nextChar == ']';
-        }
-
-        private static int ExtendSentenceBoundaryEnd(string text, int index)
-        {
-            int end = index;
-            while (end < text.Length)
-            {
-                char current = text[end];
-                if (current == '"' || current == '\'' || current == ')' || current == ']' || current == '}')
-                {
-                    end++;
-                    continue;
-                }
-
-                break;
-            }
-
-            return end;
         }
 
         private static List<SentenceIssueTemplate> BuildSentenceIssueTemplates(string original, string corrected)
@@ -4144,7 +4865,7 @@ namespace RadEdit
 
         private List<LanguageToolIssue> FilterIgnoredIssues(List<LanguageToolIssue> issues)
         {
-            if (ignoredLanguageToolRules.Count == 0)
+            if (ignoredLanguageToolRules.Count == 0 && dismissedLlmIssueKeys.Count == 0)
             {
                 return issues;
             }
@@ -4152,7 +4873,47 @@ namespace RadEdit
             var filtered = new List<LanguageToolIssue>(issues.Count);
             foreach (var issue in issues)
             {
+                if (TryExtractLlmIssueKey(issue.RuleId, out string? llmIssueKey))
+                {
+                    if (!dismissedLlmIssueKeys.Contains(llmIssueKey))
+                    {
+                        filtered.Add(issue);
+                    }
+                    continue;
+                }
+
                 if (string.IsNullOrEmpty(issue.RuleId) || !ignoredLanguageToolRules.Contains(issue.RuleId))
+                {
+                    filtered.Add(issue);
+                }
+            }
+
+            return filtered;
+        }
+
+        private static bool TryExtractLlmIssueKey(string? ruleId, out string issueKey)
+        {
+            issueKey = string.Empty;
+            if (string.IsNullOrEmpty(ruleId) || !ruleId.StartsWith("llm:", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            issueKey = ruleId.Substring(4);
+            return issueKey.Length > 0;
+        }
+
+        private List<LanguageToolIssue> FilterProtectedIssues(List<LanguageToolIssue> issues)
+        {
+            if (issues.Count == 0)
+            {
+                return issues;
+            }
+
+            var filtered = new List<LanguageToolIssue>(issues.Count);
+            foreach (LanguageToolIssue issue in issues)
+            {
+                if (!proofingDocumentState.IntersectsProtectedRange(issue.Offset, issue.Length))
                 {
                     filtered.Add(issue);
                 }
@@ -4194,10 +4955,13 @@ namespace RadEdit
         {
             languageToolStatusText = status ?? string.Empty;
             labelLtStatus.Text = $"{GetProofingStatusPrefix()}: {languageToolStatusText}";
+            UpdateProofAvailabilityDisplay();
         }
 
         private void UpdateLanguageToolBarState()
         {
+            comboLtModel.Visible = activeProofingProvider == ProofingProvider.LocalLlm;
+
             if (!languageToolEnabled)
             {
                 buttonLtPrev.Enabled = false;
@@ -4205,7 +4969,8 @@ namespace RadEdit
                 buttonLtApply.Enabled = false;
                 buttonLtIgnore.Enabled = false;
                 comboLtSuggestions.Enabled = false;
-                comboLtProvider.Enabled = true;
+                comboLtProvider.Enabled = !llmModelDiscoveryBusy;
+                comboLtModel.Enabled = false;
                 buttonLtCheck.Enabled = false;
                 return;
             }
@@ -4214,14 +4979,16 @@ namespace RadEdit
             bool canNavigate = languageToolIssues.Count > 1;
             var currentIssue = GetCurrentIssue();
             bool hasSuggestions = currentIssue != null && currentIssue.Replacements.Count > 0;
+            bool controlsBusy = languageToolBusy || llmModelDiscoveryBusy;
 
-            buttonLtPrev.Enabled = canNavigate && !languageToolBusy;
-            buttonLtNext.Enabled = canNavigate && !languageToolBusy;
-            buttonLtApply.Enabled = hasIssues && hasSuggestions && !languageToolBusy;
-            buttonLtIgnore.Enabled = hasIssues && !languageToolBusy;
-            comboLtSuggestions.Enabled = hasIssues && hasSuggestions && !languageToolBusy;
-            comboLtProvider.Enabled = !languageToolBusy;
-            buttonLtCheck.Enabled = !languageToolBusy;
+            buttonLtPrev.Enabled = canNavigate && !controlsBusy;
+            buttonLtNext.Enabled = canNavigate && !controlsBusy;
+            buttonLtApply.Enabled = hasIssues && hasSuggestions && !controlsBusy;
+            buttonLtIgnore.Enabled = hasIssues && !controlsBusy;
+            comboLtSuggestions.Enabled = hasIssues && hasSuggestions && !controlsBusy;
+            comboLtProvider.Enabled = !controlsBusy;
+            comboLtModel.Enabled = false;
+            buttonLtCheck.Enabled = !controlsBusy;
         }
 
         private void CheckBoxLtEnabled_CheckedChanged(object? sender, EventArgs e)
@@ -4249,13 +5016,27 @@ namespace RadEdit
             {
                 languageToolOffline = false;
                 UpdateLanguageToolStatus("ready");
-                if (string.IsNullOrWhiteSpace(richTextBox1.Text))
+                if (activeProofingProvider == ProofingProvider.LocalLlm)
                 {
-                    _ = ProbeProofingStatusAsync();
+                    if (string.IsNullOrWhiteSpace(richTextBox1.Text))
+                    {
+                        _ = ProbeProofingStatusAsync();
+                    }
+                    else
+                    {
+                        _ = InitializeLlmModelStateAsync(rerunProofing: true);
+                    }
                 }
                 else
                 {
-                    ScheduleLanguageToolCheck(richTextBox1.Text, true);
+                    if (string.IsNullOrWhiteSpace(richTextBox1.Text))
+                    {
+                        _ = ProbeProofingStatusAsync();
+                    }
+                    else
+                    {
+                        ScheduleLanguageToolCheck(richTextBox1.Text, true);
+                    }
                 }
             }
 
@@ -4986,11 +5767,7 @@ namespace RadEdit
                 return;
             }
 
-            string replacement = issue.Replacements[0];
-            RunProgrammaticRtfUpdate(() => ReplaceTextRange(issue.Offset, issue.Length, replacement));
-            HideLanguageToolHoverMenu();
-            RemoveIssueImmediately(issue, richTextBox1.Text);
-            ScheduleLanguageToolCheck(richTextBox1.Text, true);
+            ApplyProofingReplacement(issue, issue.Replacements[0], ProofingApplyCaretBehavior.PreserveCaretOffset);
         }
 
         private void IgnoreActiveIssueFromHotkey()
@@ -5246,6 +6023,12 @@ namespace RadEdit
                 return;
             }
 
+            if (Control.MouseButtons != MouseButtons.None || richTextBox1.SelectionLength > 0)
+            {
+                HideLanguageToolHoverMenu();
+                return;
+            }
+
             Point screenPoint = richTextBox1.PointToScreen(e.Location);
             if (languageToolHoverMenu.Visible && languageToolHoverMenu.Bounds.Contains(screenPoint))
             {
@@ -5370,7 +6153,25 @@ namespace RadEdit
                 return;
             }
 
-            RunProgrammaticRtfUpdate(() => ReplaceTextRange(issue.Offset, issue.Length, replacement));
+            ApplyProofingReplacement(issue, replacement, ProofingApplyCaretBehavior.MoveToReplacementEnd);
+        }
+
+        private void ApplyProofingReplacement(
+            LanguageToolIssue issue,
+            string replacement,
+            ProofingApplyCaretBehavior caretBehavior)
+        {
+            RunProgrammaticRtfUpdate(() =>
+            {
+                if (caretBehavior == ProofingApplyCaretBehavior.MoveToReplacementEnd)
+                {
+                    ReplaceTextRange(issue.Offset, issue.Length, replacement, restoreSelection: false);
+                }
+                else
+                {
+                    ReplaceTextRangePreservingCaretOffset(issue.Offset, issue.Length, replacement);
+                }
+            });
             HideLanguageToolHoverMenu();
             RemoveIssueImmediately(issue, richTextBox1.Text);
             ScheduleLanguageToolCheck(richTextBox1.Text, true);
@@ -5378,6 +6179,14 @@ namespace RadEdit
 
         private void IgnoreLanguageToolIssue(LanguageToolIssue issue)
         {
+            if (TryExtractLlmIssueKey(issue.RuleId, out string? llmIssueKey))
+            {
+                dismissedLlmIssueKeys.Add(llmIssueKey);
+                HideLanguageToolHoverMenu();
+                DismissLanguageToolIssue(issue);
+                return;
+            }
+
             if (!string.IsNullOrEmpty(issue.RuleId))
             {
                 ignoredLanguageToolRules.Add(issue.RuleId);
@@ -5576,11 +6385,7 @@ namespace RadEdit
                 return;
             }
 
-            string replacement = suggestion.Replacement;
-            RunProgrammaticRtfUpdate(() => ReplaceTextRange(issue.Offset, issue.Length, replacement));
-            HideLanguageToolHoverMenu();
-            RemoveIssueImmediately(issue, richTextBox1.Text);
-            ScheduleLanguageToolCheck(richTextBox1.Text, true);
+            ApplyProofingReplacement(issue, suggestion.Replacement, ProofingApplyCaretBehavior.PreserveCaretOffset);
         }
 
         private void ButtonLtIgnore_Click(object? sender, EventArgs e)
@@ -5625,6 +6430,20 @@ namespace RadEdit
 
         private void ButtonLtCheck_Click(object? sender, EventArgs e)
         {
+            if (activeProofingProvider == ProofingProvider.LocalLlm)
+            {
+                if (string.IsNullOrWhiteSpace(richTextBox1.Text))
+                {
+                    _ = ProbeProofingStatusAsync();
+                }
+                else
+                {
+                    _ = InitializeLlmModelStateAsync(rerunProofing: true);
+                }
+
+                return;
+            }
+
             ScheduleLanguageToolCheck(richTextBox1.Text, true);
         }
 
@@ -6561,7 +7380,7 @@ namespace RadEdit
             return true;
         }
 
-        private void ReplaceTextRange(int start, int length, string replacement)
+        private void ReplaceTextRange(int start, int length, string replacement, bool restoreSelection = true)
         {
             int selStart = richTextBox1.SelectionStart;
             int selLength = richTextBox1.SelectionLength;
@@ -6569,6 +7388,16 @@ namespace RadEdit
             richTextBox1.SelectionStart = start;
             richTextBox1.SelectionLength = length;
             richTextBox1.SelectedText = replacement;
+
+            if (!restoreSelection)
+            {
+                int caret = Math.Min(start + (replacement?.Length ?? 0), richTextBox1.TextLength);
+                richTextBox1.SelectionStart = caret;
+                richTextBox1.SelectionLength = 0;
+                richTextBox1.ScrollToCaret();
+                richTextBox1.Focus();
+                return;
+            }
 
             try
             {
@@ -6579,6 +7408,56 @@ namespace RadEdit
             {
                 // Selection restore is best-effort.
             }
+        }
+
+        private void ReplaceTextRangePreservingCaretOffset(int start, int length, string replacement)
+        {
+            int caretPosition = richTextBox1.SelectionStart + richTextBox1.SelectionLength;
+
+            richTextBox1.SelectionStart = start;
+            richTextBox1.SelectionLength = length;
+            richTextBox1.SelectedText = replacement;
+
+            int mappedCaret = MapCaretPositionThroughReplacement(
+                caretPosition,
+                start,
+                length,
+                replacement?.Length ?? 0);
+            mappedCaret = Math.Max(0, Math.Min(mappedCaret, richTextBox1.TextLength));
+
+            richTextBox1.SelectionStart = mappedCaret;
+            richTextBox1.SelectionLength = 0;
+            richTextBox1.ScrollToCaret();
+            richTextBox1.Focus();
+        }
+
+        private static int MapCaretPositionThroughReplacement(int caretPosition, int start, int oldLength, int newLength)
+        {
+            int oldEnd = start + oldLength;
+            int delta = newLength - oldLength;
+
+            if (caretPosition < start)
+            {
+                return caretPosition;
+            }
+
+            if (caretPosition > oldEnd)
+            {
+                return caretPosition + delta;
+            }
+
+            if (caretPosition == start)
+            {
+                return start;
+            }
+
+            if (caretPosition == oldEnd)
+            {
+                return start + newLength;
+            }
+
+            int relativeOffset = caretPosition - start;
+            return start + Math.Min(relativeOffset, newLength);
         }
 
         private static string EscapeRtfText(string text)
@@ -6841,6 +7720,11 @@ namespace RadEdit
 
         private void RichTextBox1_SelectionChanged(object? sender, EventArgs e)
         {
+            if (richTextBox1.SelectionLength > 0)
+            {
+                HideLanguageToolHoverMenu();
+            }
+
             UpdateFormattingButtons();
         }
 
@@ -7114,7 +7998,7 @@ namespace RadEdit
                 return $"{parsed.Major}.{parsed.Minor}";
             }
 
-            return "0.2.8";
+            return "0.2.9";
         }
 
         private static class NativeMethods

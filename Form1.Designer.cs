@@ -42,6 +42,7 @@ namespace RadEdit
             labelLtStatus = new Label();
             checkBoxLtEnabled = new CheckBox();
             comboLtProvider = new ComboBox();
+            comboLtModel = new ComboBox();
             buttonLtPrev = new Button();
             buttonLtNext = new Button();
             comboLtSuggestions = new ComboBox();
@@ -179,12 +180,14 @@ namespace RadEdit
             flowLtBar.Controls.Add(labelLtStatus);
             flowLtBar.Controls.Add(checkBoxLtEnabled);
             flowLtBar.Controls.Add(comboLtProvider);
+            flowLtBar.Controls.Add(comboLtModel);
             flowLtBar.Controls.Add(buttonLtPrev);
             flowLtBar.Controls.Add(buttonLtNext);
             flowLtBar.Controls.Add(comboLtSuggestions);
             flowLtBar.Controls.Add(buttonLtApply);
             flowLtBar.Controls.Add(buttonLtIgnore);
             flowLtBar.Controls.Add(buttonLtCheck);
+            flowLtBar.AutoScroll = true;
             flowLtBar.Dock = DockStyle.Fill;
             flowLtBar.FlowDirection = FlowDirection.LeftToRight;
             flowLtBar.Location = new Point(6, 3);
@@ -225,13 +228,23 @@ namespace RadEdit
             comboLtProvider.Size = new Size(130, 23);
             comboLtProvider.TabIndex = 2;
             // 
+            // comboLtModel
+            // 
+            comboLtModel.DropDownStyle = ComboBoxStyle.DropDownList;
+            comboLtModel.FormattingEnabled = true;
+            comboLtModel.Location = new Point(288, 0);
+            comboLtModel.Margin = new Padding(0, 0, 10, 0);
+            comboLtModel.Name = "comboLtModel";
+            comboLtModel.Size = new Size(220, 23);
+            comboLtModel.TabIndex = 3;
+            // 
             // buttonLtPrev
             // 
             buttonLtPrev.AutoSize = true;
-            buttonLtPrev.Location = new Point(288, 0);
+            buttonLtPrev.Location = new Point(518, 0);
             buttonLtPrev.Name = "buttonLtPrev";
             buttonLtPrev.Size = new Size(53, 23);
-            buttonLtPrev.TabIndex = 3;
+            buttonLtPrev.TabIndex = 4;
             buttonLtPrev.Text = "Prev";
             buttonLtPrev.UseVisualStyleBackColor = true;
             buttonLtPrev.Click += ButtonLtPrev_Click;
@@ -239,10 +252,10 @@ namespace RadEdit
             // buttonLtNext
             // 
             buttonLtNext.AutoSize = true;
-            buttonLtNext.Location = new Point(347, 0);
+            buttonLtNext.Location = new Point(577, 0);
             buttonLtNext.Name = "buttonLtNext";
             buttonLtNext.Size = new Size(52, 23);
-            buttonLtNext.TabIndex = 4;
+            buttonLtNext.TabIndex = 5;
             buttonLtNext.Text = "Next";
             buttonLtNext.UseVisualStyleBackColor = true;
             buttonLtNext.Click += ButtonLtNext_Click;
@@ -251,18 +264,18 @@ namespace RadEdit
             // 
             comboLtSuggestions.DropDownStyle = ComboBoxStyle.DropDownList;
             comboLtSuggestions.FormattingEnabled = true;
-            comboLtSuggestions.Location = new Point(405, 0);
+            comboLtSuggestions.Location = new Point(635, 0);
             comboLtSuggestions.Name = "comboLtSuggestions";
-            comboLtSuggestions.Size = new Size(180, 23);
-            comboLtSuggestions.TabIndex = 5;
+            comboLtSuggestions.Size = new Size(160, 23);
+            comboLtSuggestions.TabIndex = 6;
             // 
             // buttonLtApply
             // 
             buttonLtApply.AutoSize = true;
-            buttonLtApply.Location = new Point(591, 0);
+            buttonLtApply.Location = new Point(801, 0);
             buttonLtApply.Name = "buttonLtApply";
             buttonLtApply.Size = new Size(55, 23);
-            buttonLtApply.TabIndex = 6;
+            buttonLtApply.TabIndex = 7;
             buttonLtApply.Text = "Apply";
             buttonLtApply.UseVisualStyleBackColor = true;
             buttonLtApply.Click += ButtonLtApply_Click;
@@ -270,10 +283,10 @@ namespace RadEdit
             // buttonLtIgnore
             // 
             buttonLtIgnore.AutoSize = true;
-            buttonLtIgnore.Location = new Point(652, 0);
+            buttonLtIgnore.Location = new Point(862, 0);
             buttonLtIgnore.Name = "buttonLtIgnore";
             buttonLtIgnore.Size = new Size(56, 23);
-            buttonLtIgnore.TabIndex = 7;
+            buttonLtIgnore.TabIndex = 8;
             buttonLtIgnore.Text = "Ignore";
             buttonLtIgnore.UseVisualStyleBackColor = true;
             buttonLtIgnore.Click += ButtonLtIgnore_Click;
@@ -281,10 +294,10 @@ namespace RadEdit
             // buttonLtCheck
             // 
             buttonLtCheck.AutoSize = true;
-            buttonLtCheck.Location = new Point(714, 0);
+            buttonLtCheck.Location = new Point(924, 0);
             buttonLtCheck.Name = "buttonLtCheck";
             buttonLtCheck.Size = new Size(78, 23);
-            buttonLtCheck.TabIndex = 8;
+            buttonLtCheck.TabIndex = 9;
             buttonLtCheck.Text = "Check Now";
             buttonLtCheck.UseVisualStyleBackColor = true;
             buttonLtCheck.Click += ButtonLtCheck_Click;
@@ -469,6 +482,7 @@ namespace RadEdit
         private Label labelLtStatus;
         private CheckBox checkBoxLtEnabled;
         private ComboBox comboLtProvider;
+        private ComboBox comboLtModel;
         private Button buttonLtPrev;
         private Button buttonLtNext;
         private ComboBox comboLtSuggestions;
