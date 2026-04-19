@@ -11,7 +11,9 @@ Changes since the previous version:
 - Simplified the proofreading UI: `Proof` now lives next to `Pop RTF`, the current loaded model display sits beside it, only the suggestion list plus `Apply` and `Ignore` remain on the lower bar, and the old flickering status/provider/navigation controls are hidden.
 - Added focused proofreading hotkeys `F11` = Apply and `F12` = Ignore while keeping the existing global `Ctrl+Alt+F11` / `Ctrl+Alt+F12` hotkeys, and exposed both shortcut paths in the button tooltips.
 - Added runtime LLM model discovery from `/api/v1/models`, only use models that already report `loaded_instances`, show `No loaded model on server` when none are ready, retry discovery if the current model stops responding, and display the server's model `display_name` beside `Proof`.
-- Added proof-status availability text beside `Proof` for server/model failures and kept a visible inactive caret plus one-click activation/caret placement in the editor even when RadEdit is not focused.
+- Added proof-status availability text beside `Proof` for server/model failures.
+- Added a visible inactive caret so the insertion point remains visible even when RadEdit is not focused, which helps anchored Dragon dictation workflows.
+- Fixed RichText editor activation so clicking once inside the editor while RadEdit is inactive both activates the window and places the caret at the clicked position.
 
 ## v0.2.8 - 2026-04-06
 
