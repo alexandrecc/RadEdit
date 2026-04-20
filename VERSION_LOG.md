@@ -14,6 +14,10 @@ Changes since the previous version:
 - Added proof-status availability text beside `Proof` for server/model failures.
 - Added a visible inactive caret so the insertion point remains visible even when RadEdit is not focused, which helps anchored Dragon dictation workflows.
 - Fixed RichText editor activation so clicking once inside the editor while RadEdit is inactive both activates the window and places the caret at the clicked position.
+- Moved LLM proofreading work onto revisioned background snapshots, then added a queued one-unit-at-a-time drain with longer debounce for unstable/open text so long reports and Dragon-anchored dictation no longer stall the editor while proofing catches up incrementally.
+- Added `%APPDATA%\RadEdit\radedit-debug.log` performance/debug logging in Debug builds, including startup probe failures, slow proofing phases, cancellation traces, and targeted LLM dismissal diagnostics to troubleshoot freezes and missing suggestions.
+- Relaxed LLM startup availability checks so launch now relies on loaded-model discovery instead of a startup completion probe, retries normal proofing after stale offline states, and distinguishes startup/server timeouts from true offline failures more accurately.
+- Improved LLM dismissal persistence so ignored suggestions survive later reprocessing of the same sentence more reliably, and added logging to verify when regenerated suggestions are suppressed by prior dismissals.
 
 ## v0.2.8 - 2026-04-06
 

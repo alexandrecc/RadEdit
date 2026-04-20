@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Windows.Forms;
 
@@ -76,11 +77,21 @@ namespace RadEdit
 
         private void DrawUnderlines()
         {
+            Stopwatch? totalStopwatch = RadEditDebugLog.StartTiming();
             using Graphics graphics = CreateGraphics();
             int textLength = TextLength;
             if (textLength == 0)
             {
                 DrawInactiveCaret(graphics, textLength);
+                if (totalStopwatch != null)
+                {
+                    totalStopwatch.Stop();
+                    RadEditDebugLog.WriteSlowOperation(
+                        "LanguageToolRichTextBox.DrawUnderlines",
+                        totalStopwatch.ElapsedMilliseconds,
+                        16,
+                        "textLength=0");
+                }
                 return;
             }
 
@@ -140,6 +151,15 @@ namespace RadEdit
             }
 
             DrawInactiveCaret(graphics, textLength);
+            if (totalStopwatch != null)
+            {
+                totalStopwatch.Stop();
+                RadEditDebugLog.WriteSlowOperation(
+                    "LanguageToolRichTextBox.DrawUnderlines",
+                    totalStopwatch.ElapsedMilliseconds,
+                    16,
+                    $"textLength={textLength} underlines={underlineRanges.Count} active={(activeRange.HasValue ? 1 : 0)}");
+            }
         }
 
         private Point GetUnderlineEndPoint(int charIndex, int textLength)
