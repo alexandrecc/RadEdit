@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text.RegularExpressions;
 
@@ -73,6 +74,15 @@ namespace RadEdit
             var oldTrusted = new List<TextRange>(trustedRanges);
             var oldSlots = new List<ProofingSlot>(slots);
             TextChange change = ComputeTextChange(oldText, newText);
+            RadEditDebugLog.Write(
+                "Proofing state change. "
+                + "Source=" + source
+                + " Start=" + change.Start.ToString(CultureInfo.InvariantCulture)
+                + " OldLength=" + change.OldLength.ToString(CultureInfo.InvariantCulture)
+                + " NewLength=" + change.NewLength.ToString(CultureInfo.InvariantCulture)
+                + " OldFragment=" + DescribeChangedFragment(oldText, change.Start, change.OldLength)
+                + " NewFragment=" + DescribeChangedFragment(newText, change.Start, change.NewLength)
+                + " Before=" + DescribeCurrentStateForLog());
             int oldChangeEnd = change.Start + change.OldLength;
             int delta = change.NewLength - change.OldLength;
 
@@ -89,11 +99,19 @@ namespace RadEdit
                 NormalizeRanges(trustedRanges);
                 NormalizeSlots(slots);
                 RebuildProtectedRanges();
+                RadEditDebugLog.Write(
+                    "Proofing state updated from trusted automation. "
+                    + "ChangedRange=" + DescribeRange(changedRange)
+                    + " After=" + DescribeCurrentStateForLog());
                 return;
             }
 
             ProofingSlot? touchedProtectedSlot = FindTouchedProtectedSlot(oldSlots, change);
             bool touchedTrustedScaffold = TouchesTrustedContent(oldTrusted, change);
+            RadEditDebugLog.Write(
+                "Proofing user edit analysis. "
+                + "TouchedProtectedSlot=" + DescribeNullableSlot(touchedProtectedSlot)
+                + " TouchedTrustedScaffold=" + touchedTrustedScaffold);
 
             if (touchedProtectedSlot is ProofingSlot protectedSlot)
             {
@@ -121,6 +139,7 @@ namespace RadEdit
             NormalizeRanges(trustedRanges);
             NormalizeSlots(slots);
             RebuildProtectedRanges();
+            RadEditDebugLog.Write("Proofing state updated from user edit. After=" + DescribeCurrentStateForLog());
         }
 
         public bool HasProofableContent(string text)
@@ -168,23 +187,59 @@ namespace RadEdit
 
         public List<ProofingUnit> BuildLlmProofingUnits()
         {
+            return BuildLlmProofingUnitsCore(debugLines: null);
+        }
+
+        public string DescribeCurrentStateForLog()
+        {
+            return "TextLength=" + currentText.Length.ToString(CultureInfo.InvariantCulture)
+                + " Trusted=" + DescribeRanges(trustedRanges)
+                + " Slots=" + DescribeSlots(slots)
+                + " Protected=" + DescribeRanges(protectedRanges);
+        }
+
+        public string DescribeLlmProofingPlanForLog()
+        {
+            var debugLines = new List<string>();
+            List<ProofingUnit> units = BuildLlmProofingUnitsCore(debugLines);
+            return "State={" + DescribeCurrentStateForLog()
+                + "} Units=" + DescribeUnits(units)
+                + " Decisions=" + DescribeDebugLines(debugLines);
+        }
+
+        private List<ProofingUnit> BuildLlmProofingUnitsCore(List<string>? debugLines)
+        {
             var units = new List<ProofingUnit>();
             if (string.IsNullOrWhiteSpace(currentText))
             {
+                debugLines?.Add("No units because current text is empty.");
                 return units;
             }
 
             List<SentenceSegment> segments = SentenceSegmentation.Split(currentText);
             if (segments.Count == 0)
             {
+                debugLines?.Add("No units because sentence segmentation returned 0 segments.");
                 return units;
             }
 
             var sentenceUnitRanges = new List<TextRange>();
-            var nonSentenceSlotRanges = slots
-                .Where(slot => !slot.IsProtected && slot.Policy != SlotProofPolicy.SentenceScoped)
-                .Select(slot => slot.Range)
-                .ToList();
+            var fieldValueSentenceCoverageRanges = new List<TextRange>();
+            foreach (ProofingSlot slot in slots)
+            {
+                if (slot.IsProtected || slot.Policy != SlotProofPolicy.FieldValue)
+                {
+                    continue;
+                }
+
+                fieldValueSentenceCoverageRanges.Add(slot.Range);
+
+                TextRange fieldLabelRange = GetFieldValueSentenceShieldRange(slot);
+                if (fieldLabelRange.Length > 0)
+                {
+                    fieldValueSentenceCoverageRanges.Add(fieldLabelRange);
+                }
+            }
 
             foreach (SentenceSegment segment in segments)
             {
@@ -197,17 +252,23 @@ namespace RadEdit
                 {
                     units.Add(new ProofingUnit(ProofingUnitKind.Sentence, segment.Start, segment.Length, segment.Text));
                     sentenceUnitRanges.Add(segmentRange);
+                    debugLines?.Add(
+                        "Sentence " + DescribeSegment(segment)
+                        + " -> emitted sentence unit because it intersects a sentence-scoped slot.");
                     continue;
                 }
 
                 if (IsRangeProtected(segment.Start, segment.Length))
                 {
+                    debugLines?.Add(
+                        "Sentence " + DescribeSegment(segment)
+                        + " -> skipped because the full sentence is protected.");
                     continue;
                 }
 
-                var coverageRanges = new List<TextRange>(protectedRanges.Count + nonSentenceSlotRanges.Count);
+                var coverageRanges = new List<TextRange>(protectedRanges.Count + fieldValueSentenceCoverageRanges.Count);
                 coverageRanges.AddRange(protectedRanges);
-                foreach (TextRange range in nonSentenceSlotRanges)
+                foreach (TextRange range in fieldValueSentenceCoverageRanges)
                 {
                     if (RangesIntersect(range, segmentRange))
                     {
@@ -220,32 +281,66 @@ namespace RadEdit
                 {
                     units.Add(new ProofingUnit(ProofingUnitKind.Sentence, segment.Start, segment.Length, segment.Text));
                     sentenceUnitRanges.Add(segmentRange);
+                    debugLines?.Add(
+                        "Sentence " + DescribeSegment(segment)
+                        + " -> emitted sentence unit because coverage is incomplete. Coverage="
+                        + DescribeRanges(coverageRanges));
+                }
+                else
+                {
+                    debugLines?.Add(
+                        "Sentence " + DescribeSegment(segment)
+                        + " -> skipped because protected ranges plus field-value slots cover the full sentence. Coverage="
+                        + DescribeRanges(coverageRanges));
                 }
             }
 
             var emittedSlotContexts = new HashSet<string>(StringComparer.Ordinal);
             foreach (ProofingSlot slot in slots)
             {
-                if (slot.IsProtected || slot.Policy == SlotProofPolicy.SentenceScoped)
+                if (slot.IsProtected)
                 {
+                    debugLines?.Add(
+                        "Slot " + DescribeSlot(slot)
+                        + " -> no slot-context unit because it is still protected.");
+                    continue;
+                }
+
+                if (slot.Policy == SlotProofPolicy.SentenceScoped)
+                {
+                    debugLines?.Add(
+                        "Slot " + DescribeSlot(slot)
+                        + " -> no slot-context unit because it is sentence-scoped.");
+                    continue;
+                }
+
+                if (slot.Policy == SlotProofPolicy.Strict)
+                {
+                    debugLines?.Add(
+                        "Slot " + DescribeSlot(slot)
+                        + " -> no slot-context unit because strict slots use sentence-segment units.");
                     continue;
                 }
 
                 bool coveredBySentenceUnit = sentenceUnitRanges.Any(range => RangeContains(range, slot.Range));
                 if (coveredBySentenceUnit)
                 {
+                    debugLines?.Add(
+                        "Slot " + DescribeSlot(slot)
+                        + " -> no slot-context unit because an emitted sentence unit already covers it.");
                     continue;
                 }
 
-                TextRange contextRange = ExpandRangeToLineRange(currentText, slot.Range);
-                if (contextRange.Length <= 0)
-                {
-                    contextRange = slot.Range;
-                }
+                TextRange contextRange = slot.Range;
 
                 string contextKey = contextRange.Start.ToString() + ":" + contextRange.Length.ToString();
                 if (!emittedSlotContexts.Add(contextKey))
                 {
+                    debugLines?.Add(
+                        "Slot " + DescribeSlot(slot)
+                        + " -> no slot-context unit because context "
+                        + DescribeRange(contextRange)
+                        + " was already emitted.");
                     continue;
                 }
 
@@ -253,6 +348,10 @@ namespace RadEdit
                     contextRange.Length <= 0 ||
                     contextRange.Start + contextRange.Length > currentText.Length)
                 {
+                    debugLines?.Add(
+                        "Slot " + DescribeSlot(slot)
+                        + " -> skipped because computed context range is invalid: "
+                        + DescribeRange(contextRange));
                     continue;
                 }
 
@@ -261,10 +360,29 @@ namespace RadEdit
                     contextRange.Start,
                     contextRange.Length,
                     currentText.Substring(contextRange.Start, contextRange.Length)));
+                debugLines?.Add(
+                    "Slot " + DescribeSlot(slot)
+                    + " -> emitted slot-context unit " + DescribeRange(contextRange)
+                    + " Text=" + FormatTextForLog(currentText.Substring(contextRange.Start, contextRange.Length)));
             }
 
             units.Sort((left, right) => left.Start.CompareTo(right.Start));
+            debugLines?.Add("Final proofing units=" + DescribeUnits(units));
             return units;
+        }
+
+        private TextRange GetFieldValueSentenceShieldRange(ProofingSlot slot)
+        {
+            TextRange lineRange = ExpandRangeToLineRange(currentText, slot.Range);
+            if (lineRange.Length <= 0 || slot.Range.Start <= lineRange.Start)
+            {
+                return default;
+            }
+
+            int prefixLength = slot.Range.Start - lineRange.Start;
+            return prefixLength > 0
+                ? new TextRange(lineRange.Start, prefixLength)
+                : default;
         }
 
         private void AddTrustedRegionState(TextRange range)
@@ -867,6 +985,143 @@ namespace RadEdit
             }
 
             return changeStart;
+        }
+
+        private static string DescribeChangedFragment(string text, int start, int length)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                return "\"\"";
+            }
+
+            int safeStart = Math.Max(0, Math.Min(start, text.Length));
+            int safeLength = Math.Max(0, Math.Min(length, text.Length - safeStart));
+            int windowStart = Math.Max(0, safeStart - 24);
+            int windowEnd = Math.Min(text.Length, safeStart + Math.Max(safeLength, 1) + 24);
+            return "["
+                + windowStart.ToString(CultureInfo.InvariantCulture)
+                + ":"
+                + (windowEnd - windowStart).ToString(CultureInfo.InvariantCulture)
+                + "]="
+                + FormatTextForLog(text.Substring(windowStart, windowEnd - windowStart), 180);
+        }
+
+        private static string DescribeRange(TextRange range)
+        {
+            return "("
+                + range.Start.ToString(CultureInfo.InvariantCulture)
+                + ","
+                + range.Length.ToString(CultureInfo.InvariantCulture)
+                + ")";
+        }
+
+        private static string DescribeRanges(IEnumerable<TextRange> ranges)
+        {
+            var list = ranges.ToList();
+            if (list.Count == 0)
+            {
+                return "[]";
+            }
+
+            return "["
+                + string.Join(", ", list.Select(DescribeRange))
+                + "]";
+        }
+
+        private string DescribeSlots(IEnumerable<ProofingSlot> currentSlots)
+        {
+            var list = currentSlots.ToList();
+            if (list.Count == 0)
+            {
+                return "[]";
+            }
+
+            return "["
+                + string.Join(", ", list.Select(DescribeSlot))
+                + "]";
+        }
+
+        private string DescribeSlot(ProofingSlot slot)
+        {
+            string slotText = string.Empty;
+            if (slot.Range.Start >= 0 &&
+                slot.Range.Length > 0 &&
+                slot.Range.Start + slot.Range.Length <= currentText.Length)
+            {
+                slotText = currentText.Substring(slot.Range.Start, slot.Range.Length);
+            }
+
+            TextRange lineRange = ExpandRangeToLineRange(currentText, slot.Range);
+            string lineText = string.Empty;
+            if (lineRange.Length > 0 &&
+                lineRange.Start >= 0 &&
+                lineRange.Start + lineRange.Length <= currentText.Length)
+            {
+                lineText = currentText.Substring(lineRange.Start, lineRange.Length);
+            }
+
+            return "Id=" + slot.Id.ToString("N")
+                + " Range=" + DescribeRange(slot.Range)
+                + " Policy=" + slot.Policy
+                + " Protected=" + slot.IsProtected
+                + " Text=" + FormatTextForLog(slotText)
+                + " Line=" + FormatTextForLog(lineText);
+        }
+
+        private string DescribeNullableSlot(ProofingSlot? slot)
+        {
+            return slot is ProofingSlot value ? DescribeSlot(value) : "none";
+        }
+
+        private static string DescribeSegment(SentenceSegment segment)
+        {
+            return "Start=" + segment.Start.ToString(CultureInfo.InvariantCulture)
+                + " Length=" + segment.Length.ToString(CultureInfo.InvariantCulture)
+                + " Text=" + FormatTextForLog(segment.Text);
+        }
+
+        private static string DescribeUnits(IEnumerable<ProofingUnit> units)
+        {
+            var list = units.ToList();
+            if (list.Count == 0)
+            {
+                return "[]";
+            }
+
+            return "["
+                + string.Join(", ", list.Select(unit =>
+                    unit.Kind
+                    + "@"
+                    + unit.Start.ToString(CultureInfo.InvariantCulture)
+                    + "+"
+                    + unit.Length.ToString(CultureInfo.InvariantCulture)
+                    + "="
+                    + FormatTextForLog(unit.Text)))
+                + "]";
+        }
+
+        private static string DescribeDebugLines(IEnumerable<string> debugLines)
+        {
+            var list = debugLines.ToList();
+            if (list.Count == 0)
+            {
+                return "[]";
+            }
+
+            return "[" + string.Join(" || ", list) + "]";
+        }
+
+        private static string FormatTextForLog(string? text, int maxLength = 120)
+        {
+            string normalized = (text ?? string.Empty)
+                .Replace("\r", "\\r")
+                .Replace("\n", "\\n");
+            if (normalized.Length <= maxLength)
+            {
+                return normalized;
+            }
+
+            return normalized.Substring(0, maxLength) + "...";
         }
 
         private static TextChange ComputeTextChange(string oldText, string newText)

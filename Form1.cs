@@ -497,16 +497,89 @@ namespace RadEdit
             public LlmProofUnitState(
                 ProofingUnit unit,
                 List<SentenceIssueTemplate>? templates = null,
-                bool isEvaluated = false)
+                bool isEvaluated = false,
+                DateTime? lastTouchedUtc = null,
+                bool isInFlight = false)
             {
                 Unit = unit;
                 Templates = templates ?? new List<SentenceIssueTemplate>();
                 IsEvaluated = isEvaluated;
+                LastTouchedUtc = lastTouchedUtc ?? DateTime.UtcNow;
+                IsInFlight = isInFlight;
+            }
+
+            public ProofingUnit Unit { get; set; }
+            public List<SentenceIssueTemplate> Templates { get; set; }
+            public bool IsEvaluated { get; set; }
+            public DateTime LastTouchedUtc { get; set; }
+            public bool IsInFlight { get; set; }
+        }
+
+        private sealed class LlmPreparedProofingRequest
+        {
+            public LlmPreparedProofingRequest(ProofingUnit unit)
+            {
+                Unit = unit;
             }
 
             public ProofingUnit Unit { get; }
+        }
+
+        private sealed class LlmPreparedProofingBatch
+        {
+            public LlmPreparedProofingBatch(
+                long revision,
+                string text,
+                string baseUrl,
+                string model,
+                List<LlmPreparedProofingRequest> requests,
+                bool hasDeferredReadyUnits,
+                bool hasNotReadyUnits)
+            {
+                Revision = revision;
+                Text = text ?? string.Empty;
+                BaseUrl = baseUrl ?? string.Empty;
+                Model = model ?? string.Empty;
+                Requests = requests ?? new List<LlmPreparedProofingRequest>();
+                HasDeferredReadyUnits = hasDeferredReadyUnits;
+                HasNotReadyUnits = hasNotReadyUnits;
+            }
+
+            public long Revision { get; }
+            public string Text { get; }
+            public string BaseUrl { get; }
+            public string Model { get; }
+            public List<LlmPreparedProofingRequest> Requests { get; }
+            public bool HasDeferredReadyUnits { get; }
+            public bool HasNotReadyUnits { get; }
+        }
+
+        private sealed class LlmPreparedProofingResponse
+        {
+            public LlmPreparedProofingResponse(
+                ProofingUnit requestedUnit,
+                List<SentenceIssueTemplate> templates)
+            {
+                RequestedUnit = requestedUnit;
+                Templates = templates ?? new List<SentenceIssueTemplate>();
+            }
+
+            public ProofingUnit RequestedUnit { get; }
             public List<SentenceIssueTemplate> Templates { get; }
-            public bool IsEvaluated { get; }
+        }
+
+        private sealed class LlmPreparedProofingBatchResult
+        {
+            public LlmPreparedProofingBatchResult(
+                LlmPreparedProofingBatch batch,
+                List<LlmPreparedProofingResponse> responses)
+            {
+                Batch = batch;
+                Responses = responses ?? new List<LlmPreparedProofingResponse>();
+            }
+
+            public LlmPreparedProofingBatch Batch { get; }
+            public List<LlmPreparedProofingResponse> Responses { get; }
         }
 
         private readonly record struct LlmDismissedSuggestion(
@@ -517,65 +590,21 @@ namespace RadEdit
             string LeftContext,
             string RightContext);
 
-        private sealed class LlmProofingSnapshot
-        {
-            public LlmProofingSnapshot(
-                long revision,
-                string text,
-                string baseUrl,
-                string model,
-                List<ProofingUnit> units,
-                List<LlmProofUnitState> previousStates,
-                Dictionary<string, List<SentenceIssueTemplate>> cachedTemplates)
-            {
-                Revision = revision;
-                Text = text ?? string.Empty;
-                BaseUrl = baseUrl ?? string.Empty;
-                Model = model ?? string.Empty;
-                Units = units ?? new List<ProofingUnit>();
-                PreviousStates = previousStates ?? new List<LlmProofUnitState>();
-                CachedTemplates = cachedTemplates ?? new Dictionary<string, List<SentenceIssueTemplate>>(StringComparer.Ordinal);
-            }
-
-            public long Revision { get; }
-            public string Text { get; }
-            public string BaseUrl { get; }
-            public string Model { get; }
-            public List<ProofingUnit> Units { get; }
-            public List<LlmProofUnitState> PreviousStates { get; }
-            public Dictionary<string, List<SentenceIssueTemplate>> CachedTemplates { get; }
-        }
-
-        private sealed class LlmProofingResult
-        {
-            public LlmProofingResult(
-                LlmProofingSnapshot snapshot,
-                List<LlmProofUnitState> nextStates,
-                Dictionary<string, List<SentenceIssueTemplate>> cachedTemplates,
-                bool hasDeferredUnits)
-            {
-                Snapshot = snapshot;
-                NextStates = nextStates ?? new List<LlmProofUnitState>();
-                CachedTemplates = cachedTemplates ?? new Dictionary<string, List<SentenceIssueTemplate>>(StringComparer.Ordinal);
-                HasDeferredUnits = hasDeferredUnits;
-            }
-
-            public LlmProofingSnapshot Snapshot { get; }
-            public List<LlmProofUnitState> NextStates { get; }
-            public Dictionary<string, List<SentenceIssueTemplate>> CachedTemplates { get; }
-            public bool HasDeferredUnits { get; }
-        }
-
         private sealed class LlmProofreadIssuesResult
         {
-            public LlmProofreadIssuesResult(List<LanguageToolIssue> issues, bool hasDeferredUnits)
+            public LlmProofreadIssuesResult(
+                List<LanguageToolIssue> issues,
+                bool hasDeferredReadyUnits,
+                bool hasNotReadyUnits)
             {
                 Issues = issues ?? new List<LanguageToolIssue>();
-                HasDeferredUnits = hasDeferredUnits;
+                HasDeferredReadyUnits = hasDeferredReadyUnits;
+                HasNotReadyUnits = hasNotReadyUnits;
             }
 
             public List<LanguageToolIssue> Issues { get; }
-            public bool HasDeferredUnits { get; }
+            public bool HasDeferredReadyUnits { get; }
+            public bool HasNotReadyUnits { get; }
         }
 
         private sealed class LanguageToolIssue
@@ -725,8 +754,14 @@ namespace RadEdit
 
             public async Task<List<LoadedLlmModel>> GetLoadedModelsAsync(CancellationToken cancellationToken)
             {
+                LogDebug("LLM models request. Uri=" + modelsUri);
                 using var response = await httpClient.GetAsync(modelsUri, cancellationToken);
                 string rawResponse = await response.Content.ReadAsStringAsync(cancellationToken);
+                LogDebug(
+                    "LLM models response. "
+                    + "Uri=" + modelsUri
+                    + " Status=" + (int)response.StatusCode
+                    + " Body=" + FormatTextForLog(rawResponse, 400));
                 if (!response.IsSuccessStatusCode)
                 {
                     throw new InvalidOperationException(
@@ -757,6 +792,11 @@ namespace RadEdit
                     }
                 }
 
+                LogDebug(
+                    "LLM loaded models parsed. Count="
+                    + loadedModels.Count.ToString(CultureInfo.InvariantCulture)
+                    + " Models="
+                    + string.Join(", ", loadedModels.Select(model => model.Id + "=" + model.DisplayName)));
                 return loadedModels;
             }
 
@@ -784,9 +824,19 @@ namespace RadEdit
                     ["max_tokens"] = Math.Max(80, Math.Min(256, sanitizedSentence.Length * 3))
                 };
 
+                LogDebug(
+                    "LLM HTTP request. "
+                    + "Model=" + requestModel
+                    + " Uri=" + requestUri
+                    + " Sentence=" + FormatTextForLog(sanitizedSentence, 400));
                 using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
                 using var response = await httpClient.PostAsync(requestUri, content, cancellationToken);
                 string rawResponse = await response.Content.ReadAsStringAsync(cancellationToken);
+                LogDebug(
+                    "LLM HTTP response. "
+                    + "Model=" + requestModel
+                    + " Status=" + (int)response.StatusCode
+                    + " Body=" + FormatTextForLog(rawResponse, 500));
                 if (!response.IsSuccessStatusCode)
                 {
                     throw new InvalidOperationException(
@@ -1313,9 +1363,9 @@ namespace RadEdit
         private const string NoLoadedLlmModelText = "No loaded model on server";
         private const string LegacyGemmaDefaultLlmModel = "gemma-4-31b-it";
         private const int LanguageToolDebounceMs = 700;
-        private const int LlmOpenSegmentDebounceMs = 1200;
-        private const int LlmUnfocusedClosedSegmentDebounceMs = 1800;
-        private const int LlmUnfocusedOpenSegmentDebounceMs = 2500;
+        private const int LlmOpenSegmentDebounceMs = 700;
+        private const int LlmUnfocusedClosedSegmentDebounceMs = 700;
+        private const int LlmUnfocusedOpenSegmentDebounceMs = 700;
         private const int LlmFollowUpDebounceMs = 250;
         private const int MaxNewLlmUnitsPerPass = 1;
         private const int LanguageToolTimeoutSeconds = 25;
@@ -1671,6 +1721,11 @@ namespace RadEdit
                 string previousModel = NormalizeLlmModel(proofingSettings.LlmModel);
                 bool previousLoadedModelAvailable = llmLoadedModelAvailable;
                 string selectedModel = previousModel;
+                LogDebug(
+                    "RefreshLlmModelsAsync start. "
+                    + "BaseUrl=" + baseUrl
+                    + " PreviousModel=" + previousModel
+                    + " PreviousLoadedModelAvailable=" + previousLoadedModelAvailable);
 
                 proofingSettings.LlmBaseUrl = baseUrl;
                 proofingSettings.LlmModel = previousModel;
@@ -1697,6 +1752,11 @@ namespace RadEdit
                     selectedModel = string.Empty;
                 }
 
+                LogDebug(
+                    "RefreshLlmModelsAsync result. "
+                    + "LoadedModelAvailable=" + llmLoadedModelAvailable
+                    + " SelectedModel=" + selectedModel
+                    + " Models=" + string.Join(", ", availableLlmModels));
                 bool modelChanged = llmLoadedModelAvailable &&
                     !string.Equals(previousModel, selectedModel, StringComparison.Ordinal);
                 bool availabilityChanged = previousLoadedModelAvailable != llmLoadedModelAvailable;
@@ -2114,12 +2174,24 @@ namespace RadEdit
                     var copyData = NativeMethods.GetCopyData(m.LParam);
                     var command = (CopyDataCommand)copyData.dwData.ToInt64();
                     string payload = NativeMethods.CopyDataToString(copyData);
+                    LogDebug(
+                        "WM_COPYDATA received. "
+                        + "Sender=" + senderHandle
+                        + " Command=" + DescribeCopyDataCommand(command)
+                        + " Payload=" + FormatTextForLog(payload, 400));
 
                     bool handled = HandleCopyDataCommand(command, payload, senderHandle);
+                    LogDebug(
+                        "WM_COPYDATA handled. "
+                        + "Sender=" + senderHandle
+                        + " Command=" + DescribeCopyDataCommand(command)
+                        + " Handled=" + handled
+                        + " TextLength=" + richTextBox1.TextLength.ToString(CultureInfo.InvariantCulture));
                     m.Result = handled ? new IntPtr(1) : IntPtr.Zero;
                 }
                 catch (Exception ex)
                 {
+                    LogDebug("WM_COPYDATA failed. Sender=" + senderHandle + " Error=" + ex.Message);
                     NativeMethods.SendCopyData(senderHandle, CopyDataCommand.ErrorResponse, ex.Message);
                     m.Result = IntPtr.Zero;
                 }
@@ -2185,13 +2257,13 @@ namespace RadEdit
             switch (command)
             {
                 case CopyDataCommand.SetRtfText:
-                    return RunCopyDataMutationWithoutProofing(() => TrySetRtf(payload));
+                    return RunCopyDataMutationWithoutProofing(nameof(CopyDataCommand.SetRtfText), () => TrySetRtf(payload));
                 case CopyDataCommand.InsertRtfText:
-                    return RunCopyDataMutationWithoutProofing(() => TryInsertRtf(payload));
+                    return RunCopyDataMutationWithoutProofing(nameof(CopyDataCommand.InsertRtfText), () => TryInsertRtf(payload));
                 case CopyDataCommand.SetRtfFile:
-                    return RunCopyDataMutationWithoutProofing(() => TryApplyRtfFile(payload, replaceContent: true));
+                    return RunCopyDataMutationWithoutProofing(nameof(CopyDataCommand.SetRtfFile), () => TryApplyRtfFile(payload, replaceContent: true));
                 case CopyDataCommand.InsertRtfFile:
-                    return RunCopyDataMutationWithoutProofing(() => TryApplyRtfFile(payload, replaceContent: false));
+                    return RunCopyDataMutationWithoutProofing(nameof(CopyDataCommand.InsertRtfFile), () => TryApplyRtfFile(payload, replaceContent: false));
                 case CopyDataCommand.RequestTempFile:
                     return TrySendTempFilePath(senderHandle, payload);
                 case CopyDataCommand.SetHtmlFile:
@@ -2214,7 +2286,7 @@ namespace RadEdit
                 case CopyDataCommand.GetName:
                     return TrySendName(senderHandle);
                 case CopyDataCommand.SetDataContext:
-                    return RunCopyDataMutationWithoutProofing(() => TrySetDataContext(payload));
+                    return RunCopyDataMutationWithoutProofing(nameof(CopyDataCommand.SetDataContext), () => TrySetDataContext(payload));
                 case CopyDataCommand.GetDataContext:
                     return TrySendDataContext(senderHandle, payload);
                 case CopyDataCommand.GotoEnd:
@@ -2222,7 +2294,7 @@ namespace RadEdit
                 case CopyDataCommand.FixFont:
                     return TryFixFontCommand(payload);
                 case CopyDataCommand.CleanUpEnd:
-                    return RunCopyDataMutationWithoutProofing(TryCleanUpEnd);
+                    return RunCopyDataMutationWithoutProofing(nameof(CopyDataCommand.CleanUpEnd), TryCleanUpEnd);
                 default:
                     NativeMethods.SendCopyData(senderHandle, CopyDataCommand.ErrorResponse, "Unknown command.");
                     return false;
@@ -2246,12 +2318,32 @@ namespace RadEdit
             return true;
         }
 
-        private bool RunCopyDataMutationWithoutProofing(Func<bool> action)
+        private bool RunCopyDataMutationWithoutProofing(string operation, Func<bool> action)
         {
+            string beforeText = richTextBox1.Text;
             suppressProofingForCopyDataDepth++;
             try
             {
-                return action();
+                LogDebug(
+                    "CopyData mutation begin. "
+                    + "Command=" + operation
+                    + " BeforeLength=" + beforeText.Length.ToString(CultureInfo.InvariantCulture)
+                    + " State=" + proofingDocumentState.DescribeCurrentStateForLog());
+                bool result = action();
+                string afterText = richTextBox1.Text;
+                LogDebug(
+                    "CopyData mutation end. "
+                    + "Command=" + operation
+                    + " Result=" + result
+                    + " Change=" + DescribeTextChangeForLog(beforeText, afterText)
+                    + " AfterLength=" + afterText.Length.ToString(CultureInfo.InvariantCulture)
+                    + " State=" + proofingDocumentState.DescribeCurrentStateForLog());
+                return result;
+            }
+            catch (Exception ex)
+            {
+                LogDebug("CopyData mutation failed. Command=" + operation + " Error=" + ex.Message);
+                throw;
             }
             finally
             {
@@ -4023,6 +4115,7 @@ namespace RadEdit
 
             if (string.IsNullOrEmpty(inserted))
             {
+                LogDebug("RichTextBox1_TextChanged ignored for HTML mirroring because no inserted text was detected.");
                 return;
             }
 
@@ -4038,6 +4131,7 @@ namespace RadEdit
 
             if (routed)
             {
+                LogDebug("RichTextBox1_TextChanged routed inserted text to HTML. Inserted=" + FormatTextForLog(inserted, 320));
                 suppressRtfEvents = true;
                 try
                 {
@@ -4053,6 +4147,7 @@ namespace RadEdit
             }
             else
             {
+                LogDebug("RichTextBox1_TextChanged fell back to proofing path after HTML routing miss. Inserted=" + FormatTextForLog(inserted, 320));
                 HandleEditableProofingTextChanged(newText);
             }
         }
@@ -4060,12 +4155,18 @@ namespace RadEdit
         private void HandleEditableProofingTextChanged(string newText)
         {
             Stopwatch? totalStopwatch = RadEditDebugLog.StartTiming();
+            string previousText = lastPlainText;
+            LogDebug("User text change detected. Change=" + DescribeTextChangeForLog(previousText, newText));
             Stopwatch? applyChangeStopwatch = RadEditDebugLog.StartTiming();
             proofingDocumentState.ApplyChange(newText, ProofingChangeSource.UserEdit);
             unchecked
             {
                 proofingTextRevision++;
             }
+            LogDebug(
+                "User text change applied. "
+                + "Revision=" + proofingTextRevision.ToString(CultureInfo.InvariantCulture)
+                + " State=" + proofingDocumentState.DescribeCurrentStateForLog());
             LogSlowOperation(
                 "ProofingDocumentState.ApplyChange",
                 applyChangeStopwatch,
@@ -4089,11 +4190,17 @@ namespace RadEdit
 
         private void HandleCopyDataProofingBypass(string newText)
         {
+            string previousText = lastPlainText;
+            LogDebug("Trusted automation text change detected. Change=" + DescribeTextChangeForLog(previousText, newText));
             proofingDocumentState.ApplyChange(newText, ProofingChangeSource.TrustedAutomation);
             unchecked
             {
                 proofingTextRevision++;
             }
+            LogDebug(
+                "Trusted automation text change applied. "
+                + "Revision=" + proofingTextRevision.ToString(CultureInfo.InvariantCulture)
+                + " State=" + proofingDocumentState.DescribeCurrentStateForLog());
             languageToolTimer.Stop();
             CancelLanguageToolCts();
             languageToolBusy = false;
@@ -4229,11 +4336,13 @@ namespace RadEdit
         {
             if (!languageToolEnabled)
             {
+                LogDebug("Proofing schedule skipped because proofing is disabled.");
                 return;
             }
 
             if (string.IsNullOrEmpty(text))
             {
+                LogDebug("Proofing schedule cleared because text is empty.");
                 ClearLanguageToolIssues();
                 return;
             }
@@ -4255,22 +4364,29 @@ namespace RadEdit
                 $"highlights={languageToolHighlightedRanges.Count}");
             if (languageToolOffline && !force && activeProofingProvider != ProofingProvider.LocalLlm)
             {
+                LogDebug("Proofing schedule skipped because LanguageTool is offline and no force flag was requested.");
                 return;
             }
-            if (!force && string.Equals(text, lastLanguageToolText, StringComparison.Ordinal))
+            if (!force &&
+                string.Equals(text, lastLanguageToolText, StringComparison.Ordinal) &&
+                (activeProofingProvider != ProofingProvider.LocalLlm || !HasPendingLlmWork()))
             {
+                LogDebug("Proofing schedule skipped because the text matches the last completed proofing snapshot.");
                 return;
             }
 
             pendingLanguageToolText = text;
             pendingLanguageToolForce |= force;
+            bool closedBoundary = EndsWithClosedProofingBoundary(text);
 
             if (activeProofingProvider == ProofingProvider.LocalLlm)
             {
                 llmLastEditUtc = DateTime.UtcNow;
+                RefreshTrackedLlmProofingUnits(llmLastEditUtc);
                 if (languageToolBusy)
                 {
                     llmProofingRunPending = true;
+                    LogDebug("Proofing schedule queued a follow-up because an LLM proofing run is already in progress.");
                 }
                 else
                 {
@@ -4285,6 +4401,13 @@ namespace RadEdit
             }
 
             UpdateLanguageToolStatus("checking...");
+            LogDebug(
+                "Proofing scheduled. "
+                + "Provider=" + activeProofingProvider
+                + " Force=" + force
+                + " PendingForce=" + pendingLanguageToolForce
+                + " ClosedBoundary=" + closedBoundary
+                + " TextLength=" + text.Length.ToString(CultureInfo.InvariantCulture));
             LogSlowOperation(
                 "ScheduleLanguageToolCheck.total",
                 totalStopwatch,
@@ -4369,15 +4492,27 @@ namespace RadEdit
             }
             else
             {
-                int targetDelay = GetLlmProofingDebounceMilliseconds(pendingLanguageToolText, pendingLanguageToolForce);
-                DateTime lastEditUtc = llmLastEditUtc == DateTime.MinValue ? DateTime.UtcNow : llmLastEditUtc;
-                int elapsed = (int)Math.Max(0, (DateTime.UtcNow - lastEditUtc).TotalMilliseconds);
-                delayMilliseconds = Math.Max(1, targetDelay - elapsed);
+                if (!TryGetNextLlmProofingDelayMilliseconds(
+                        pendingLanguageToolForce,
+                        DateTime.UtcNow,
+                        out delayMilliseconds))
+                {
+                    languageToolTimer.Stop();
+                    LogDebug("LLM proofing timer not restarted because there are no pending units to evaluate.");
+                    return;
+                }
             }
 
             languageToolTimer.Stop();
             languageToolTimer.Interval = delayMilliseconds;
             languageToolTimer.Start();
+            LogDebug(
+                "LLM proofing timer restarted. "
+                + "DelayMs=" + delayMilliseconds.ToString(CultureInfo.InvariantCulture)
+                + " OverrideDelayMs=" + (overrideDelayMilliseconds?.ToString(CultureInfo.InvariantCulture) ?? "none")
+                + " ClosedBoundary=" + EndsWithClosedProofingBoundary(pendingLanguageToolText)
+                + " PendingForce=" + pendingLanguageToolForce
+                + " PendingLength=" + pendingLanguageToolText.Length.ToString(CultureInfo.InvariantCulture));
         }
 
         private int GetLlmProofingDebounceMilliseconds(string text, bool force)
@@ -4489,26 +4624,41 @@ namespace RadEdit
         private async void LanguageToolTimer_Tick(object? sender, EventArgs e)
         {
             languageToolTimer.Stop();
+            LogDebug(
+                "Proofing timer tick. "
+                + "Provider=" + activeProofingProvider
+                + " Busy=" + languageToolBusy
+                + " PendingLength=" + pendingLanguageToolText.Length.ToString(CultureInfo.InvariantCulture)
+                + " PendingForce=" + pendingLanguageToolForce);
             if (activeProofingProvider == ProofingProvider.LocalLlm && languageToolBusy)
             {
                 llmProofingRunPending = true;
+                LogDebug("Proofing timer tick deferred because an LLM proofing run is already in progress.");
                 return;
             }
 
+            bool force = pendingLanguageToolForce;
             pendingLanguageToolForce = false;
-            await RunLanguageToolCheckAsync(pendingLanguageToolText);
+            await RunLanguageToolCheckAsync(pendingLanguageToolText, force);
         }
 
-        private async Task RunLanguageToolCheckAsync(string text)
+        private async Task RunLanguageToolCheckAsync(string text, bool force = false)
         {
             if (!languageToolEnabled)
             {
+                LogDebug("Proofing check aborted because proofing is disabled.");
                 return;
             }
 
             Stopwatch? totalStopwatch = RadEditDebugLog.StartTiming();
             bool queueLlmFollowUp = false;
             int? llmFollowUpDelayMilliseconds = null;
+            LogDebug(
+                "Proofing check starting. "
+                + "Provider=" + activeProofingProvider
+                + " TextLength=" + text.Length.ToString(CultureInfo.InvariantCulture)
+                + " Revision=" + proofingTextRevision.ToString(CultureInfo.InvariantCulture)
+                + " State=" + proofingDocumentState.DescribeCurrentStateForLog());
 
             CancelLanguageToolCts();
             languageToolCts = new CancellationTokenSource();
@@ -4516,6 +4666,7 @@ namespace RadEdit
 
             if (string.IsNullOrEmpty(text))
             {
+                LogDebug("Proofing check cleared visible issues because the requested text is empty.");
                 ClearLanguageToolIssues();
                 return;
             }
@@ -4526,9 +4677,17 @@ namespace RadEdit
 
             string snapshot = text;
             long snapshotRevision = proofingTextRevision;
+            if (activeProofingProvider == ProofingProvider.LocalLlm)
+            {
+                RefreshTrackedLlmProofingUnits(DateTime.UtcNow);
+            }
             Stopwatch? proofableStopwatch = RadEditDebugLog.StartTiming();
             if (!proofingDocumentState.HasProofableContent(snapshot))
             {
+                LogDebug(
+                    "Proofing check found no proofable content. "
+                    + "TextLength=" + snapshot.Length.ToString(CultureInfo.InvariantCulture)
+                    + " Plan=" + proofingDocumentState.DescribeLlmProofingPlanForLog());
                 LogSlowOperation(
                     "ProofingDocumentState.HasProofableContent",
                     proofableStopwatch,
@@ -4554,13 +4713,20 @@ namespace RadEdit
             {
                 Stopwatch? providerStopwatch = RadEditDebugLog.StartTiming();
                 List<LanguageToolIssue> issues;
-                bool hasDeferredLlmUnits = false;
+                bool hasDeferredReadyLlmUnits = false;
+                bool hasNotReadyLlmUnits = false;
+                LogDebug(
+                    "Proofing provider invocation starting. "
+                    + "Provider=" + activeProofingProvider
+                    + " SnapshotRevision=" + snapshotRevision.ToString(CultureInfo.InvariantCulture)
+                    + " TextLength=" + snapshot.Length.ToString(CultureInfo.InvariantCulture));
                 if (activeProofingProvider == ProofingProvider.LocalLlm)
                 {
                     LlmProofreadIssuesResult llmResult =
-                        await RunLlmProofreadIssuesWithRecoveryAsync(snapshot, snapshotRevision, requestCancellationToken);
+                        await RunLlmProofreadIssuesWithRecoveryAsync(snapshot, snapshotRevision, requestCancellationToken, force);
                     issues = llmResult.Issues;
-                    hasDeferredLlmUnits = llmResult.HasDeferredUnits;
+                    hasDeferredReadyLlmUnits = llmResult.HasDeferredReadyUnits;
+                    hasNotReadyLlmUnits = llmResult.HasNotReadyUnits;
                 }
                 else
                 {
@@ -4571,28 +4737,38 @@ namespace RadEdit
                     providerStopwatch,
                     100,
                     $"textLength={snapshot.Length} issues={issues.Count}");
+                LogDebug(
+                    "Proofing provider invocation completed. "
+                    + "Provider=" + activeProofingProvider
+                    + " Issues=" + issues.Count.ToString(CultureInfo.InvariantCulture)
+                    + " DeferredReadyLlmUnits=" + hasDeferredReadyLlmUnits
+                    + " NotReadyLlmUnits=" + hasNotReadyLlmUnits);
 
                 if (activeProofingProvider == ProofingProvider.LocalLlm && !llmLoadedModelAvailable)
                 {
                     languageToolOffline = false;
+                    LogDebug("Proofing provider result ignored because no loaded LLM model is currently available.");
                     UpdateLanguageToolStatus(NoLoadedLlmModelText);
                     ClearLanguageToolIssues(true);
                     return;
                 }
 
                 languageToolOffline = false;
-                if (snapshotRevision != proofingTextRevision ||
-                    !string.Equals(snapshot, richTextBox1.Text, StringComparison.Ordinal))
+                if (activeProofingProvider != ProofingProvider.LocalLlm &&
+                    (snapshotRevision != proofingTextRevision ||
+                     !string.Equals(snapshot, richTextBox1.Text, StringComparison.Ordinal)))
                 {
                     pendingLanguageToolText = richTextBox1.Text;
-                    if (activeProofingProvider == ProofingProvider.LocalLlm)
-                    {
-                        llmProofingRunPending = true;
-                    }
+                    LogDebug(
+                        "Proofing provider result discarded because the editor changed during execution. "
+                        + "SnapshotRevision=" + snapshotRevision.ToString(CultureInfo.InvariantCulture)
+                        + " CurrentRevision=" + proofingTextRevision.ToString(CultureInfo.InvariantCulture));
                     return;
                 }
 
-                lastLanguageToolText = snapshot;
+                lastLanguageToolText = activeProofingProvider == ProofingProvider.LocalLlm
+                    ? richTextBox1.Text
+                    : snapshot;
                 Stopwatch? setIssuesStopwatch = RadEditDebugLog.StartTiming();
                 SetLanguageToolIssues(FilterIgnoredIssues(FilterProtectedIssues(issues)));
                 LogSlowOperation(
@@ -4600,11 +4776,23 @@ namespace RadEdit
                     setIssuesStopwatch,
                     20,
                     $"issues={languageToolIssues.Count} highlights={languageToolHighlightedRanges.Count}");
+                LogDebug(
+                    "Proofing issues applied. "
+                    + "VisibleIssues=" + languageToolIssues.Count.ToString(CultureInfo.InvariantCulture)
+                    + " DeferredReadyLlmUnits=" + hasDeferredReadyLlmUnits
+                    + " NotReadyLlmUnits=" + hasNotReadyLlmUnits);
 
-                if (activeProofingProvider == ProofingProvider.LocalLlm && hasDeferredLlmUnits)
+                if (activeProofingProvider == ProofingProvider.LocalLlm && hasDeferredReadyLlmUnits)
                 {
                     queueLlmFollowUp = true;
                     llmFollowUpDelayMilliseconds = LlmFollowUpDebounceMs;
+                    LogDebug("Proofing queued an LLM follow-up pass because some ready units were deferred.");
+                }
+                else if (activeProofingProvider == ProofingProvider.LocalLlm && hasNotReadyLlmUnits)
+                {
+                    queueLlmFollowUp = true;
+                    llmFollowUpDelayMilliseconds = null;
+                    LogDebug("Proofing queued an LLM follow-up pass because some units are still waiting for their stability delay.");
                 }
             }
             catch (OperationCanceledException) when (requestCancellationToken.IsCancellationRequested)
@@ -4642,6 +4830,7 @@ namespace RadEdit
                     {
                         llmProofingRunPending = false;
                         queueLlmFollowUp = true;
+                        LogDebug("Proofing run ended with a queued LLM follow-up because newer text arrived.");
                     }
 
                     if (queueLlmFollowUp && languageToolEnabled)
@@ -4661,50 +4850,91 @@ namespace RadEdit
         private async Task<LlmProofreadIssuesResult> RunLlmProofreadIssuesWithRecoveryAsync(
             string text,
             long revision,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            bool force)
         {
-            LlmProofingSnapshot? snapshot = TryCreateLlmProofingSnapshot(text, revision);
-            if (snapshot == null)
+            if (!llmLoadedModelAvailable)
             {
-                return new LlmProofreadIssuesResult(new List<LanguageToolIssue>(), false);
+                llmProofedUnitStates.Clear();
+                LogDebug("LLM proofread issues aborted because no loaded model is available.");
+                return new LlmProofreadIssuesResult(new List<LanguageToolIssue>(), false, false);
             }
 
-            LlmProofingResult? result;
+            RefreshTrackedLlmProofingUnits(DateTime.UtcNow);
+            LlmPreparedProofingBatch batch = PrepareLlmProofingBatch(text, revision, force);
+            if (batch.Requests.Count == 0)
+            {
+                LogDebug(
+                    "LLM proofread issues prepared with no outbound requests. "
+                    + "DeferredReady=" + batch.HasDeferredReadyUnits
+                    + " NotReady=" + batch.HasNotReadyUnits
+                    + " PendingWork=" + HasPendingLlmWork());
+                return new LlmProofreadIssuesResult(
+                    BuildLlmIssuesFromStates(llmProofedUnitStates),
+                    batch.HasDeferredReadyUnits,
+                    batch.HasNotReadyUnits);
+            }
+
+            LlmPreparedProofingBatchResult? batchResult = null;
+            bool applied = false;
             try
             {
-                result = await RunLlmProofreadSnapshotAsync(snapshot, cancellationToken);
+                try
+                {
+                    batchResult = await RunLlmPreparedProofingBatchAsync(batch, cancellationToken);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    ClearInFlightLlmProofingRequests(batch.Requests);
+                    if (!await TryRecoverUnavailableLlmModelAsync(cancellationToken, ex))
+                    {
+                        throw;
+                    }
+
+                    if (!llmLoadedModelAvailable)
+                    {
+                        llmProofedUnitStates.Clear();
+                        LogDebug("LLM proofread retry aborted because no loaded model is available after recovery.");
+                        return new LlmProofreadIssuesResult(new List<LanguageToolIssue>(), false, false);
+                    }
+
+                    RefreshTrackedLlmProofingUnits(DateTime.UtcNow);
+                    batch = PrepareLlmProofingBatch(text, revision, force);
+                    if (batch.Requests.Count == 0)
+                    {
+                        LogDebug(
+                            "LLM proofread retry prepared with no outbound requests. "
+                            + "DeferredReady=" + batch.HasDeferredReadyUnits
+                            + " NotReady=" + batch.HasNotReadyUnits
+                            + " PendingWork=" + HasPendingLlmWork());
+                        return new LlmProofreadIssuesResult(
+                            BuildLlmIssuesFromStates(llmProofedUnitStates),
+                            batch.HasDeferredReadyUnits,
+                            batch.HasNotReadyUnits);
+                    }
+
+                    batchResult = await RunLlmPreparedProofingBatchAsync(batch, cancellationToken);
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+                if (batchResult != null)
+                {
+                    ApplyLlmPreparedProofingBatchResult(batchResult);
+                    applied = true;
+                }
+
+                return new LlmProofreadIssuesResult(
+                    BuildLlmIssuesFromStates(llmProofedUnitStates),
+                    batch.HasDeferredReadyUnits,
+                    batch.HasNotReadyUnits);
             }
-            catch (InvalidOperationException ex)
+            finally
             {
-                if (!await TryRecoverUnavailableLlmModelAsync(cancellationToken, ex))
+                if (!applied)
                 {
-                    throw;
+                    ClearInFlightLlmProofingRequests(batch.Requests);
                 }
-
-                if (!IsCurrentLlmProofingRevision(revision, text) || !llmLoadedModelAvailable)
-                {
-                    return new LlmProofreadIssuesResult(new List<LanguageToolIssue>(), false);
-                }
-
-                snapshot = TryCreateLlmProofingSnapshot(text, revision);
-                if (snapshot == null)
-                {
-                    return new LlmProofreadIssuesResult(new List<LanguageToolIssue>(), false);
-                }
-
-                result = await RunLlmProofreadSnapshotAsync(snapshot, cancellationToken);
             }
-
-            cancellationToken.ThrowIfCancellationRequested();
-            if (result == null || !IsCurrentLlmProofingRevision(result.Snapshot.Revision, result.Snapshot.Text))
-            {
-                return new LlmProofreadIssuesResult(new List<LanguageToolIssue>(), false);
-            }
-
-            ApplyLlmProofingResult(result);
-            return new LlmProofreadIssuesResult(
-                BuildLlmIssuesFromStates(result.NextStates),
-                result.HasDeferredUnits);
         }
 
         private async Task<bool> TryRecoverUnavailableLlmModelAsync(
@@ -4753,179 +4983,393 @@ namespace RadEdit
             return true;
         }
 
-        private Task<LlmProofingResult> RunLlmProofreadSnapshotAsync(
-            LlmProofingSnapshot snapshot,
-            CancellationToken cancellationToken)
+        private void RefreshTrackedLlmProofingUnits(DateTime nowUtc)
         {
-            return Task.Run(async () =>
-            {
-                Stopwatch? totalStopwatch = RadEditDebugLog.StartTiming();
-                using var proofreadClient = new LlmProofreadClient(snapshot.BaseUrl, snapshot.Model);
-                Dictionary<string, List<SentenceIssueTemplate>> cachedTemplates = CloneSentenceIssueCache(snapshot.CachedTemplates);
-                List<LlmProofUnitState> nextStates = BuildLlmProofUnitSkeleton(snapshot.Units);
-
-                int prefix = 0;
-                while (prefix < snapshot.PreviousStates.Count &&
-                       prefix < nextStates.Count &&
-                       CanReuseLlmProofUnitState(snapshot.PreviousStates[prefix], nextStates[prefix]))
-                {
-                    nextStates[prefix] = ReuseLlmProofUnitState(snapshot.PreviousStates[prefix], nextStates[prefix].Unit);
-                    prefix++;
-                }
-
-                int suffix = 0;
-                int maxSuffix = Math.Min(snapshot.PreviousStates.Count - prefix, nextStates.Count - prefix);
-                while (suffix < maxSuffix)
-                {
-                    int oldIndex = snapshot.PreviousStates.Count - 1 - suffix;
-                    int newIndex = nextStates.Count - 1 - suffix;
-                    if (!CanReuseLlmProofUnitState(snapshot.PreviousStates[oldIndex], nextStates[newIndex]))
-                    {
-                        break;
-                    }
-
-                    nextStates[newIndex] = ReuseLlmProofUnitState(snapshot.PreviousStates[oldIndex], nextStates[newIndex].Unit);
-                    suffix++;
-                }
-
-                int dirtyStart = prefix;
-                int dirtyEndExclusive = nextStates.Count - suffix;
-                int totalProofableDirty = 0;
-                for (int i = dirtyStart; i < dirtyEndExclusive; i++)
-                {
-                    if (!ShouldSkipLlmSegment(nextStates[i].Unit.Text))
-                    {
-                        totalProofableDirty++;
-                    }
-                }
-
-                int proofableDirtyIndex = 0;
-                int cachedUnitCount = 0;
-                int requestedUnitCount = 0;
-                int deferredUnitCount = 0;
-                int skippedUnitCount = 0;
-                for (int i = dirtyStart; i < dirtyEndExclusive; i++)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-
-                    LlmProofUnitState state = nextStates[i];
-                    ProofingUnit unit = state.Unit;
-                    if (ShouldSkipLlmSegment(unit.Text))
-                    {
-                        LogDebug(
-                            "LLM segment skipped. "
-                            + "Unit=" + unit.Kind
-                            + " Text=" + FormatTextForLog(unit.Text));
-                        skippedUnitCount++;
-                        cachedTemplates[unit.Text] = new List<SentenceIssueTemplate>();
-                        nextStates[i] = new LlmProofUnitState(unit, isEvaluated: true);
-                        continue;
-                    }
-
-                    proofableDirtyIndex++;
-                    if (!cachedTemplates.TryGetValue(unit.Text, out List<SentenceIssueTemplate>? templates))
-                    {
-                        if (requestedUnitCount >= MaxNewLlmUnitsPerPass)
-                        {
-                            deferredUnitCount++;
-                            continue;
-                        }
-
-                        requestedUnitCount++;
-
-                        string corrected = await proofreadClient.CorrectSentenceAsync(unit.Text, cancellationToken).ConfigureAwait(false);
-                        LogDebug(
-                            "LLM response received. "
-                            + "Unit=" + unit.Kind
-                            + " Text=" + FormatTextForLog(unit.Text)
-                            + " Corrected=" + FormatTextForLog(corrected)
-                            + " Changed=" + (!string.Equals(unit.Text, corrected, StringComparison.Ordinal))
-                            + " Dirty=" + proofableDirtyIndex.ToString(CultureInfo.InvariantCulture)
-                            + "/" + Math.Max(1, totalProofableDirty).ToString(CultureInfo.InvariantCulture));
-                        templates = BuildSentenceIssueTemplates(unit.Text, corrected);
-                        if (templates.Count > 0)
-                        {
-                            LogDebug(
-                                "LLM suggestions generated. "
-                                + "Unit=" + unit.Kind
-                                + " Text=" + FormatTextForLog(unit.Text)
-                                + " Corrected=" + FormatTextForLog(corrected)
-                                + " Suggestions=" + string.Join(
-                                    " | ",
-                                    templates.Select(template =>
-                                        $"[{template.Offset},{template.Length}]=>{FormatTextForLog(template.Replacement)}")));
-                        }
-
-                        cachedTemplates[unit.Text] = templates;
-                    }
-                    else
-                    {
-                        cachedUnitCount++;
-                    }
-
-                    nextStates[i] = new LlmProofUnitState(unit, CloneSentenceTemplates(templates), isEvaluated: true);
-                }
-
-                LogSlowOperation(
-                    "RunLlmProofreadIssuesAsync.total",
-                    totalStopwatch,
-                    80,
-                    $"textLength={snapshot.Text.Length} units={snapshot.Units.Count} requested={requestedUnitCount} deferred={deferredUnitCount} cached={cachedUnitCount} skipped={skippedUnitCount}");
-                return new LlmProofingResult(snapshot, nextStates, cachedTemplates, deferredUnitCount > 0);
-            }, cancellationToken);
-        }
-
-        private LlmProofingSnapshot? TryCreateLlmProofingSnapshot(string text, long revision)
-        {
-            if (!llmLoadedModelAvailable)
-            {
-                llmProofedUnitStates.Clear();
-                return null;
-            }
-
             Stopwatch? buildUnitsStopwatch = RadEditDebugLog.StartTiming();
             List<ProofingUnit> units = proofingDocumentState.BuildLlmProofingUnits();
             LogSlowOperation(
                 "ProofingDocumentState.BuildLlmProofingUnits",
                 buildUnitsStopwatch,
                 20,
-                $"textLength={text.Length} units={units.Count}");
+                $"textLength={richTextBox1.Text.Length} units={units.Count}");
+
             if (units.Count == 0)
             {
+                if (llmProofedUnitStates.Count > 0)
+                {
+                    LogDebug("LLM unit tracker cleared because no proofing units are currently available.");
+                }
+
                 llmProofedUnitStates.Clear();
-                return null;
+                return;
             }
 
-            return new LlmProofingSnapshot(
-                revision,
-                text,
-                NormalizeLlmBaseUrl(proofingSettings.LlmBaseUrl),
-                NormalizeLlmModel(proofingSettings.LlmModel),
-                units,
-                CloneLlmProofUnitStates(llmProofedUnitStates),
-                CloneSentenceIssueCache(llmSentenceIssueCache));
-        }
-
-        private bool IsCurrentLlmProofingRevision(long revision, string text)
-        {
-            return revision == proofingTextRevision &&
-                   string.Equals(text, richTextBox1.Text, StringComparison.Ordinal) &&
-                   activeProofingProvider == ProofingProvider.LocalLlm &&
-                   !isClosing &&
-                   !IsDisposed &&
-                   !Disposing;
-        }
-
-        private void ApplyLlmProofingResult(LlmProofingResult result)
-        {
-            llmSentenceIssueCache.Clear();
-            foreach ((string key, List<SentenceIssueTemplate> templates) in result.CachedTemplates)
+            List<LlmProofUnitState> previousStates = CloneLlmProofUnitStates(llmProofedUnitStates);
+            var reusableStates = new Dictionary<string, Queue<LlmProofUnitState>>(StringComparer.Ordinal);
+            foreach (LlmProofUnitState previousState in previousStates)
             {
-                llmSentenceIssueCache[key] = CloneSentenceTemplates(templates);
+                string signature = BuildLlmUnitReuseSignature(previousState.Unit);
+                if (!reusableStates.TryGetValue(signature, out Queue<LlmProofUnitState>? queue))
+                {
+                    queue = new Queue<LlmProofUnitState>();
+                    reusableStates[signature] = queue;
+                }
+
+                queue.Enqueue(previousState);
+            }
+
+            var nextStates = new List<LlmProofUnitState>(units.Count);
+            int reusedCount = 0;
+            int newCount = 0;
+            foreach (ProofingUnit unit in units)
+            {
+                string signature = BuildLlmUnitReuseSignature(unit);
+                if (reusableStates.TryGetValue(signature, out Queue<LlmProofUnitState>? queue) &&
+                    queue.Count > 0)
+                {
+                    LlmProofUnitState previousState = queue.Dequeue();
+                    nextStates.Add(new LlmProofUnitState(
+                        unit,
+                        CloneSentenceTemplates(previousState.Templates),
+                        previousState.IsEvaluated,
+                        previousState.LastTouchedUtc,
+                        previousState.IsInFlight));
+                    reusedCount++;
+                }
+                else
+                {
+                    nextStates.Add(new LlmProofUnitState(unit, lastTouchedUtc: nowUtc));
+                    newCount++;
+                }
             }
 
             llmProofedUnitStates.Clear();
-            llmProofedUnitStates.AddRange(CloneLlmProofUnitStates(result.NextStates));
+            llmProofedUnitStates.AddRange(nextStates);
+            EnsureSkippedLlmUnitsAreEvaluated();
+            LogDebug(
+                "LLM unit tracker refreshed. "
+                + "Revision=" + proofingTextRevision.ToString(CultureInfo.InvariantCulture)
+                + " Units=" + units.Count.ToString(CultureInfo.InvariantCulture)
+                + " Reused=" + reusedCount.ToString(CultureInfo.InvariantCulture)
+                + " New=" + newCount.ToString(CultureInfo.InvariantCulture)
+                + " PendingWork=" + HasPendingLlmWork()
+                + " Tracked=" + string.Join(" | ", llmProofedUnitStates.Select(DescribeTrackedLlmProofUnitState)));
+        }
+
+        private void EnsureSkippedLlmUnitsAreEvaluated()
+        {
+            foreach (LlmProofUnitState state in llmProofedUnitStates)
+            {
+                if (state.IsEvaluated || state.IsInFlight)
+                {
+                    continue;
+                }
+
+                string? skipReason = GetLlmSkipReason(state.Unit.Text);
+                if (skipReason == null)
+                {
+                    continue;
+                }
+
+                state.Templates = new List<SentenceIssueTemplate>();
+                state.IsEvaluated = true;
+                llmSentenceIssueCache[state.Unit.Text] = new List<SentenceIssueTemplate>();
+                LogDebug(
+                    "LLM tracked unit marked evaluated without request because it is skipped. "
+                    + "Reason=" + skipReason
+                    + " Unit=" + DescribeProofingUnitForLog(state.Unit));
+            }
+        }
+
+        private bool HasPendingLlmWork()
+        {
+            foreach (LlmProofUnitState state in llmProofedUnitStates)
+            {
+                if (state.IsInFlight)
+                {
+                    return true;
+                }
+
+                if (!state.IsEvaluated && GetLlmSkipReason(state.Unit.Text) == null)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool TryGetNextLlmProofingDelayMilliseconds(
+            bool force,
+            DateTime nowUtc,
+            out int delayMilliseconds)
+        {
+            delayMilliseconds = 0;
+            EnsureSkippedLlmUnitsAreEvaluated();
+            if (force)
+            {
+                delayMilliseconds = llmProofedUnitStates.Count == 0 ? 0 : 1;
+                return llmProofedUnitStates.Count > 0;
+            }
+
+            int? minimumDelay = null;
+            foreach (LlmProofUnitState state in llmProofedUnitStates)
+            {
+                if (state.IsEvaluated || state.IsInFlight)
+                {
+                    continue;
+                }
+
+                string? skipReason = GetLlmSkipReason(state.Unit.Text);
+                if (skipReason != null)
+                {
+                    continue;
+                }
+
+                int remainingDelay = LanguageToolDebounceMs -
+                    (int)Math.Max(0, (nowUtc - state.LastTouchedUtc).TotalMilliseconds);
+                if (remainingDelay <= 0)
+                {
+                    delayMilliseconds = 1;
+                    return true;
+                }
+
+                minimumDelay = !minimumDelay.HasValue
+                    ? remainingDelay
+                    : Math.Min(minimumDelay.Value, remainingDelay);
+            }
+
+            if (!minimumDelay.HasValue)
+            {
+                return false;
+            }
+
+            delayMilliseconds = Math.Max(1, minimumDelay.Value);
+            return true;
+        }
+
+        private bool IsLlmProofUnitReady(LlmProofUnitState state, DateTime nowUtc)
+        {
+            return (nowUtc - state.LastTouchedUtc).TotalMilliseconds >= LanguageToolDebounceMs;
+        }
+
+        private LlmPreparedProofingBatch PrepareLlmProofingBatch(string text, long revision, bool force)
+        {
+            DateTime nowUtc = DateTime.UtcNow;
+            EnsureSkippedLlmUnitsAreEvaluated();
+
+            string baseUrl = NormalizeLlmBaseUrl(proofingSettings.LlmBaseUrl);
+            string model = NormalizeLlmModel(proofingSettings.LlmModel);
+            var requests = new List<LlmPreparedProofingRequest>();
+            int cachedUnitCount = 0;
+            int requestedUnitCount = 0;
+            int deferredUnitCount = 0;
+            int notReadyUnitCount = 0;
+            foreach (LlmProofUnitState state in llmProofedUnitStates)
+            {
+                if (state.IsEvaluated)
+                {
+                    continue;
+                }
+
+                if (state.IsInFlight)
+                {
+                    deferredUnitCount++;
+                    continue;
+                }
+
+                string? skipReason = GetLlmSkipReason(state.Unit.Text);
+                if (skipReason != null)
+                {
+                    continue;
+                }
+
+                if (!IsLlmProofUnitReady(state, nowUtc))
+                {
+                    notReadyUnitCount++;
+                    continue;
+                }
+
+                if (llmSentenceIssueCache.TryGetValue(state.Unit.Text, out List<SentenceIssueTemplate>? cachedTemplates))
+                {
+                    state.Templates = CloneSentenceTemplates(cachedTemplates);
+                    state.IsEvaluated = true;
+                    cachedUnitCount++;
+                    LogDebug("LLM prepared batch reused cached templates. Unit=" + DescribeProofingUnitForLog(state.Unit));
+                    continue;
+                }
+
+                if (requestedUnitCount >= MaxNewLlmUnitsPerPass)
+                {
+                    deferredUnitCount++;
+                    LogDebug(
+                        "LLM prepared batch deferred a ready unit because the per-pass request limit was reached. "
+                        + "Unit=" + DescribeProofingUnitForLog(state.Unit));
+                    continue;
+                }
+
+                state.IsInFlight = true;
+                requestedUnitCount++;
+                requests.Add(new LlmPreparedProofingRequest(state.Unit));
+                LogDebug(
+                    "LLM prepared batch queued request. "
+                    + "StableForMs=" + Math.Max(0, (int)(nowUtc - state.LastTouchedUtc).TotalMilliseconds).ToString(CultureInfo.InvariantCulture)
+                    + " Unit=" + DescribeProofingUnitForLog(state.Unit));
+            }
+
+            LogDebug(
+                "LLM prepared batch summary. "
+                + "Revision=" + revision.ToString(CultureInfo.InvariantCulture)
+                + " Requests=" + requestedUnitCount.ToString(CultureInfo.InvariantCulture)
+                + " Cached=" + cachedUnitCount.ToString(CultureInfo.InvariantCulture)
+                + " Deferred=" + deferredUnitCount.ToString(CultureInfo.InvariantCulture)
+                + " NotReady=" + notReadyUnitCount.ToString(CultureInfo.InvariantCulture)
+                + " Force=" + force
+                + " Plan=" + proofingDocumentState.DescribeLlmProofingPlanForLog());
+
+            return new LlmPreparedProofingBatch(
+                revision,
+                text,
+                baseUrl,
+                model,
+                requests,
+                deferredUnitCount > 0,
+                notReadyUnitCount > 0);
+        }
+
+        private async Task<LlmPreparedProofingBatchResult> RunLlmPreparedProofingBatchAsync(
+            LlmPreparedProofingBatch batch,
+            CancellationToken cancellationToken)
+        {
+            Stopwatch? totalStopwatch = RadEditDebugLog.StartTiming();
+            LogDebug(
+                "LLM prepared batch start. "
+                + "BaseUrl=" + batch.BaseUrl
+                + " Model=" + batch.Model
+                + " Revision=" + batch.Revision.ToString(CultureInfo.InvariantCulture)
+                + " Requests=" + string.Join(" | ", batch.Requests.Select(request => DescribeProofingUnitForLog(request.Unit))));
+
+            using var proofreadClient = new LlmProofreadClient(batch.BaseUrl, batch.Model);
+            var responses = new List<LlmPreparedProofingResponse>(batch.Requests.Count);
+            foreach (LlmPreparedProofingRequest request in batch.Requests)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                string corrected = await proofreadClient.CorrectSentenceAsync(request.Unit.Text, cancellationToken).ConfigureAwait(false);
+                LogDebug(
+                    "LLM response received. "
+                    + "Unit=" + request.Unit.Kind
+                    + " Text=" + FormatTextForLog(request.Unit.Text)
+                    + " Corrected=" + FormatTextForLog(corrected)
+                    + " Changed=" + (!string.Equals(request.Unit.Text, corrected, StringComparison.Ordinal)));
+                List<SentenceIssueTemplate> templates = BuildSentenceIssueTemplates(request.Unit.Text, corrected);
+                if (templates.Count > 0)
+                {
+                    LogDebug(
+                        "LLM suggestions generated. "
+                        + "Unit=" + request.Unit.Kind
+                        + " Text=" + FormatTextForLog(request.Unit.Text)
+                        + " Corrected=" + FormatTextForLog(corrected)
+                        + " Suggestions=" + string.Join(
+                            " | ",
+                            templates.Select(template =>
+                                $"[{template.Offset},{template.Length}]=>{FormatTextForLog(template.Replacement)}")));
+                }
+
+                responses.Add(new LlmPreparedProofingResponse(request.Unit, templates));
+            }
+
+            LogSlowOperation(
+                "RunLlmPreparedProofingBatchAsync.total",
+                totalStopwatch,
+                80,
+                $"textLength={batch.Text.Length} requests={batch.Requests.Count}");
+            LogDebug(
+                "LLM prepared batch end. "
+                + "Responses=" + responses.Count.ToString(CultureInfo.InvariantCulture)
+                + " DeferredReady=" + batch.HasDeferredReadyUnits
+                + " NotReady=" + batch.HasNotReadyUnits);
+            return new LlmPreparedProofingBatchResult(batch, responses);
+        }
+
+        private void ApplyLlmPreparedProofingBatchResult(LlmPreparedProofingBatchResult result)
+        {
+            foreach (LlmPreparedProofingResponse response in result.Responses)
+            {
+                llmSentenceIssueCache[response.RequestedUnit.Text] = CloneSentenceTemplates(response.Templates);
+                if (TryFindMatchingLlmProofUnitState(response.RequestedUnit, requireInFlight: true, out LlmProofUnitState state))
+                {
+                    state.Templates = CloneSentenceTemplates(response.Templates);
+                    state.IsEvaluated = true;
+                    state.IsInFlight = false;
+                    LogDebug(
+                        "LLM prepared batch applied response. "
+                        + "Unit=" + DescribeProofingUnitForLog(state.Unit)
+                        + " Suggestions=" + state.Templates.Count.ToString(CultureInfo.InvariantCulture));
+                }
+                else
+                {
+                    LogDebug(
+                        "LLM prepared batch ignored a stale response because the unit no longer matches the current text. "
+                        + "Unit=" + DescribeProofingUnitForLog(response.RequestedUnit));
+                }
+            }
+
+            ClearInFlightLlmProofingRequests(result.Batch.Requests);
+        }
+
+        private void ClearInFlightLlmProofingRequests(List<LlmPreparedProofingRequest> requests)
+        {
+            foreach (LlmPreparedProofingRequest request in requests)
+            {
+                if (TryFindMatchingLlmProofUnitState(request.Unit, requireInFlight: true, out LlmProofUnitState state))
+                {
+                    state.IsInFlight = false;
+                }
+            }
+        }
+
+        private bool TryFindMatchingLlmProofUnitState(
+            ProofingUnit requestedUnit,
+            bool requireInFlight,
+            out LlmProofUnitState state)
+        {
+            LlmProofUnitState? candidate = llmProofedUnitStates.FirstOrDefault(entry =>
+                entry.Unit.Kind == requestedUnit.Kind &&
+                entry.Unit.Start == requestedUnit.Start &&
+                string.Equals(entry.Unit.Text, requestedUnit.Text, StringComparison.Ordinal) &&
+                (!requireInFlight || entry.IsInFlight));
+            if (candidate != null)
+            {
+                state = candidate;
+                return true;
+            }
+
+            candidate = llmProofedUnitStates.FirstOrDefault(entry =>
+                entry.Unit.Kind == requestedUnit.Kind &&
+                string.Equals(entry.Unit.Text, requestedUnit.Text, StringComparison.Ordinal) &&
+                (!requireInFlight || entry.IsInFlight));
+            if (candidate != null)
+            {
+                state = candidate;
+                return true;
+            }
+
+            state = null!;
+            return false;
+        }
+
+        private static string BuildLlmUnitReuseSignature(ProofingUnit unit)
+        {
+            return unit.Kind.ToString() + "\u001f" + (unit.Text ?? string.Empty);
+        }
+
+        private static string DescribeTrackedLlmProofUnitState(LlmProofUnitState state)
+        {
+            return DescribeProofingUnitForLog(state.Unit)
+                + " Evaluated=" + state.IsEvaluated
+                + " InFlight=" + state.IsInFlight
+                + " LastTouchedUtc=" + state.LastTouchedUtc.ToString("O", CultureInfo.InvariantCulture);
         }
 
         private List<LanguageToolIssue> BuildLlmIssuesFromStates(List<LlmProofUnitState> states)
@@ -4943,6 +5387,12 @@ namespace RadEdit
                     int issueOffset = state.Unit.Start + template.Offset;
                     if (proofingDocumentState.IntersectsProtectedRange(issueOffset, template.Length))
                     {
+                        LogDebug(
+                            "LLM suggestion suppressed because it still intersects a protected range. "
+                            + "Unit=" + DescribeProofingUnitForLog(state.Unit)
+                            + " Offset=" + issueOffset.ToString(CultureInfo.InvariantCulture)
+                            + " Length=" + template.Length.ToString(CultureInfo.InvariantCulture)
+                            + " Replacement=" + FormatTextForLog(template.Replacement));
                         continue;
                     }
 
@@ -5050,7 +5500,12 @@ namespace RadEdit
 
         private static LlmProofUnitState ReuseLlmProofUnitState(LlmProofUnitState previous, ProofingUnit currentUnit)
         {
-            return new LlmProofUnitState(currentUnit, CloneSentenceTemplates(previous.Templates), previous.IsEvaluated);
+            return new LlmProofUnitState(
+                currentUnit,
+                CloneSentenceTemplates(previous.Templates),
+                previous.IsEvaluated,
+                previous.LastTouchedUtc,
+                previous.IsInFlight);
         }
 
         private static List<LlmProofUnitState> BuildLlmProofUnitSkeleton(List<ProofingUnit> units)
@@ -5086,7 +5541,12 @@ namespace RadEdit
             var clone = new List<LlmProofUnitState>(states.Count);
             foreach (LlmProofUnitState state in states)
             {
-                clone.Add(new LlmProofUnitState(state.Unit, CloneSentenceTemplates(state.Templates), state.IsEvaluated));
+                clone.Add(new LlmProofUnitState(
+                    state.Unit,
+                    CloneSentenceTemplates(state.Templates),
+                    state.IsEvaluated,
+                    state.LastTouchedUtc,
+                    state.IsInFlight));
             }
 
             return clone;
@@ -5210,15 +5670,20 @@ namespace RadEdit
 
         private static bool ShouldSkipLlmSegment(string text)
         {
+            return GetLlmSkipReason(text) != null;
+        }
+
+        private static string? GetLlmSkipReason(string text)
+        {
             string trimmed = (text ?? string.Empty).Trim();
             if (string.IsNullOrEmpty(trimmed))
             {
-                return true;
+                return "empty-or-whitespace";
             }
 
             if (Regex.IsMatch(trimmed, @"^(?:\[\s*\]\s*)+$", RegexOptions.CultureInvariant))
             {
-                return true;
+                return "only-empty-bracket-containers";
             }
 
             int letterCount = 0;
@@ -5244,11 +5709,13 @@ namespace RadEdit
 
             if (letterCount == 0 || lowerCount > 0 || upperCount != letterCount)
             {
-                return false;
+                return null;
             }
 
             int wordCount = Regex.Matches(trimmed, @"[\p{L}\p{N}]+", RegexOptions.CultureInvariant).Count;
-            return wordCount > 0 && wordCount <= 12 && trimmed.Length <= 120;
+            return wordCount > 0 && wordCount <= 12 && trimmed.Length <= 120
+                ? "heading-like-uppercase-segment"
+                : null;
         }
 
         private static List<SentenceIssueTemplate> BuildSentenceIssueTemplates(string original, string corrected)
@@ -5454,7 +5921,7 @@ namespace RadEdit
             return Regex.Replace(text, @"\s+", " ", RegexOptions.CultureInvariant);
         }
 
-        private static string FormatTextForLog(string text, int maxLength = 240)
+        private static string FormatTextForLog(string? text, int maxLength = 240)
         {
             string normalized = (text ?? string.Empty)
                 .Replace("\r", "\\r")
@@ -7167,6 +7634,7 @@ namespace RadEdit
                     dataContext = new JsonObject();
                 }
 
+                LogDebug("SetDataContext cleared existing data context.");
                 return true;
             }
 
@@ -7175,6 +7643,12 @@ namespace RadEdit
             {
                 throw new ArgumentException("SetDataContext payload must be a JSON object.");
             }
+
+            LogDebug(
+                "SetDataContext received. "
+                + "PushToHtml=" + pushToHtml
+                + " Keys=" + DescribeJsonKeysForLog(obj)
+                + " Payload=" + FormatTextForLog(payload, 500));
 
             if (TryReplaceDataContext(obj, out JsonObject? replaceData))
             {
@@ -7402,6 +7876,11 @@ namespace RadEdit
                 return;
             }
 
+            LogDebug(
+                "ApplyDataContextUpdates start. "
+                + "PushToHtml=" + pushToHtml
+                + " Keys=" + DescribeJsonKeysForLog(updates));
+
             var htmlUpdates = new JsonObject();
             var rtfUpdates = new Dictionary<string, string>(StringComparer.Ordinal);
             foreach (var kvp in updates)
@@ -7427,8 +7906,17 @@ namespace RadEdit
 
             if (!pushToHtml || !isHtmlMode || htmlUpdates.Count == 0)
             {
+                LogDebug(
+                    "ApplyDataContextUpdates completed without HTML push. "
+                    + "RtfKeys=" + string.Join(", ", rtfUpdates.Keys)
+                    + " HtmlKeys=" + string.Join(", ", htmlUpdates.Select(kvp => kvp.Key)));
                 return;
             }
+
+            LogDebug(
+                "ApplyDataContextUpdates completed. "
+                + "RtfKeys=" + string.Join(", ", rtfUpdates.Keys)
+                + " HtmlKeys=" + string.Join(", ", htmlUpdates.Select(kvp => kvp.Key)));
 
             BeginInvoke(new Action(async () =>
             {
@@ -8297,6 +8785,89 @@ namespace RadEdit
             }
 
             return (slashCount % 2) == 1;
+        }
+
+        private static string DescribeCopyDataCommand(CopyDataCommand command)
+        {
+            return Enum.IsDefined(typeof(CopyDataCommand), command)
+                ? command.ToString()
+                : "Unknown(" + ((long)command).ToString(CultureInfo.InvariantCulture) + ")";
+        }
+
+        private static string DescribeTextChangeForLog(string oldText, string newText)
+        {
+            oldText ??= string.Empty;
+            newText ??= string.Empty;
+
+            if (string.Equals(oldText, newText, StringComparison.Ordinal))
+            {
+                return "unchanged";
+            }
+
+            int prefix = 0;
+            int maxPrefix = Math.Min(oldText.Length, newText.Length);
+            while (prefix < maxPrefix && oldText[prefix] == newText[prefix])
+            {
+                prefix++;
+            }
+
+            int suffix = 0;
+            int maxSuffix = Math.Min(oldText.Length - prefix, newText.Length - prefix);
+            while (suffix < maxSuffix &&
+                   oldText[oldText.Length - 1 - suffix] == newText[newText.Length - 1 - suffix])
+            {
+                suffix++;
+            }
+
+            int oldLength = oldText.Length - prefix - suffix;
+            int newLength = newText.Length - prefix - suffix;
+            return "start=" + prefix.ToString(CultureInfo.InvariantCulture)
+                + " oldLength=" + oldLength.ToString(CultureInfo.InvariantCulture)
+                + " newLength=" + newLength.ToString(CultureInfo.InvariantCulture)
+                + " old=" + DescribeTextWindowForLog(oldText, prefix, oldLength)
+                + " new=" + DescribeTextWindowForLog(newText, prefix, newLength);
+        }
+
+        private static string DescribeTextWindowForLog(string text, int start, int length)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                return "\"\"";
+            }
+
+            int safeStart = Math.Max(0, Math.Min(start, text.Length));
+            int safeLength = Math.Max(0, Math.Min(length, text.Length - safeStart));
+            int windowStart = Math.Max(0, safeStart - 24);
+            int windowEnd = Math.Min(text.Length, safeStart + Math.Max(safeLength, 1) + 24);
+            return "["
+                + windowStart.ToString(CultureInfo.InvariantCulture)
+                + ":"
+                + (windowEnd - windowStart).ToString(CultureInfo.InvariantCulture)
+                + "]="
+                + FormatTextForLog(text.Substring(windowStart, windowEnd - windowStart), 220);
+        }
+
+        private static string DescribeJsonKeysForLog(JsonObject obj)
+        {
+            if (obj.Count == 0)
+            {
+                return "[]";
+            }
+
+            return "["
+                + string.Join(", ", obj.Select(kvp => kvp.Key))
+                + "]";
+        }
+
+        private static string DescribeProofingUnitForLog(ProofingUnit unit)
+        {
+            return unit.Kind
+                + "@"
+                + unit.Start.ToString(CultureInfo.InvariantCulture)
+                + "+"
+                + unit.Length.ToString(CultureInfo.InvariantCulture)
+                + "="
+                + FormatTextForLog(unit.Text, 220);
         }
 
         private static void LogDebug(string message)
