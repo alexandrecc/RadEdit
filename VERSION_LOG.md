@@ -1,19 +1,14 @@
 # Version Log
 
-## Unreleased - 2026-04-22
+## v0.2.9 - 2026-04-22
 
-Changes since `v0.2.9`:
+Changes since the previous version:
 
 - Added much deeper `%APPDATA%\RadEdit\radedit-debug.log` diagnostics around `WM_COPYDATA`, trusted-vs-user text mutations, proofing state transitions, LLM scheduling, model discovery, HTTP requests/responses, and protected-range suppression decisions.
 - Reworked local LLM proofing to track sentence/slot units individually with per-unit stability timestamps and in-flight state, so stable units can continue to proof progressively while later dictation is still changing elsewhere in the document.
 - Tightened forced LLM rechecks so `Force=True` wakes the proofing pipeline immediately but no longer bypasses the per-unit stability delay, and split follow-up scheduling between deferred ready work and units that are still waiting to become stable.
 - Changed slot proofing behavior so `Strict` slots now proof sentence-by-sentence like normal text, `FieldValue` slots proof only the field value, and field labels such as `Renseignements cliniques:` are no longer sent to the LLM as part of the first sentence.
 - Added a repo-local `NuGet.Config` so local .NET 8 restore/build/publish commands can run without depending on blocked user-profile NuGet configuration.
-
-## v0.2.9 - 2026-04-19
-
-Changes since the previous version:
-
 - Reworked proofreading around a stateful document model so trusted `WM_COPYDATA` scaffold text is not re-corrected, `[]` placeholders become tracked slots, and dictated text only proofs the relevant local sentence or slot context.
 - Added slot policies for `[]` placeholders so heading/title slots stay protected while sentence-embedded slots can still proof the surrounding sentence when that makes grammatical sense.
 - Reused unchanged LLM proofing units across edits and added stable in-memory dismissal keys so unchanged LLM suggestions no longer reappear immediately after being ignored.
