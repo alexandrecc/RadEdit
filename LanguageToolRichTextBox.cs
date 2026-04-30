@@ -39,6 +39,26 @@ namespace RadEdit
         protected override void WndProc(ref Message m)
         {
             const int WM_MOUSEACTIVATE = 0x0021;
+            const int WM_SETFOCUS = 0x0007;
+            const int WM_KILLFOCUS = 0x0008;
+            const int WM_ENABLE = 0x000A;
+            if (m.Msg == WM_MOUSEACTIVATE ||
+                m.Msg == WM_SETFOCUS ||
+                m.Msg == WM_KILLFOCUS ||
+                m.Msg == WM_ENABLE)
+            {
+                RadEditDebugLog.Write(
+                    "RichTextBox window message. "
+                    + "Message=" + DescribeWindowMessage(m.Msg)
+                    + " WParam=" + m.WParam
+                    + " Focused=" + Focused
+                    + " ContainsFocus=" + ContainsFocus
+                    + " CanFocus=" + CanFocus
+                    + " Enabled=" + Enabled
+                    + " Visible=" + Visible
+                    + " TextLength=" + TextLength);
+            }
+
             if (m.Msg == WM_MOUSEACTIVATE && CanFocus && !Focused)
             {
                 Focus();
@@ -61,6 +81,18 @@ namespace RadEdit
             {
                 Invalidate();
             }
+        }
+
+        private static string DescribeWindowMessage(int message)
+        {
+            return message switch
+            {
+                0x0007 => "WM_SETFOCUS",
+                0x0008 => "WM_KILLFOCUS",
+                0x000A => "WM_ENABLE",
+                0x0021 => "WM_MOUSEACTIVATE",
+                _ => "0x" + message.ToString("X")
+            };
         }
 
         protected override void Dispose(bool disposing)

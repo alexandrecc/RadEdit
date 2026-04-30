@@ -12,7 +12,15 @@ dotnet build
 dotnet run --project RadEdit.csproj
 ```
 
-A Debug build targets `net8.0-windows` and produces `bin\Debug\net8.0-windows\RadEdit.exe`.
+A Debug build targets `net8.0-windows7.0` and produces `bin\Debug\net8.0-windows7.0\RadEdit.exe`.
+
+## Debugging UI Freezes
+
+Debug builds always write `%APPDATA%\RadEdit\radedit-debug.log`. Release builds can enable the same log by setting `RADEDIT_DEBUG_LOG=1` or by creating `%APPDATA%\RadEdit\debug-log.enabled`.
+
+The debug log includes a UI heartbeat/watchdog. If Windows shows `RadEdit is not responding`, look for `UI_PUMP_STALL suspected` followed by the current UI operation and editor/proofing state.
+
+Optional manual marker: run `scripts\radedit-debug-marker.ahk` and press `Ctrl+Alt+F10` when a freeze or Dragon anchor loss occurs. The marker is written by AutoHotkey, so it still works while RadEdit is not pumping messages.
 
 ## LanguageTool (French) local server
 
@@ -47,6 +55,10 @@ RadEdit uses an OpenAI-compatible LLM server for proofreading. The built-in defa
 - Model: `qwen3.5-9b-claude-4.6-opus-reasoning-distilled-v2`
 
 The LLM path tracks trusted scaffold text inserted through `WM_COPYDATA`, recognizes `[]` placeholders as editable slots, and proofs only the affected local sentence or slot context after a user edit or dictation. Suggestions still surface as individual accept/ignore items inside RadEdit.
+
+By default, LLM correction uses the OpenAI-compatible `/v1/responses` API. RadEdit initializes one cached base response for the fixed proofreading instructions, then branches each sentence request from that base with `previous_response_id`. This keeps the prompt context stable while avoiding resending the full instruction block for every dictated sentence. Set `RADEDIT_LLM_API_MODE=completions` to force the legacy `/v1/completions` path.
+
+When debug logging is enabled, `/v1/responses` entries include the base/previous response id plus token diagnostics such as `CachedTokens` and `ReasoningTokens`.
 
 On a first run with no saved settings, the `Proof` toggle starts unchecked. On startup, RadEdit queries `/api/v1/models`, looks for the first model that already has a `loaded_instances` entry, and uses that model. If no model is already loaded on the server, RadEdit shows `No loaded model on server` beside `Proof` and does not try to load one itself.
 

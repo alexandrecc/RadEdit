@@ -725,20 +725,29 @@ namespace RadEdit
             private readonly record struct LlmCorrectionResponse(bool AgreementChanged, string? Corrected);
             public readonly record struct LoadedLlmModel(string Id, string DisplayName);
 
+            private const string LlmApiModeEnvironmentVariable = "RADEDIT_LLM_API_MODE";
+            private const string LlmCompletionsApiMode = "completions";
+            private const string LlmResponsesApiMode = "responses";
+            private static readonly object ResponsesBaseSync = new();
+            private static readonly SemaphoreSlim ResponsesBaseInitializationGate = new(1, 1);
             private static readonly HttpClient SharedHttpClient = new()
             {
-                Timeout = TimeSpan.FromSeconds(LanguageToolTimeoutSeconds)
+                Timeout = TimeSpan.FromSeconds(LlmProofingTimeoutSeconds)
             };
 
             private readonly HttpClient httpClient;
             private Uri completionsUri;
+            private Uri responsesUri;
             private Uri modelsUri;
             private string model;
+            private static string? cachedResponsesBaseKey;
+            private static string? cachedResponsesBaseResponseId;
 
             public LlmProofreadClient(string baseUrl, string model)
             {
                 httpClient = SharedHttpClient;
                 completionsUri = BuildCompletionsUri(baseUrl);
+                responsesUri = BuildResponsesUri(baseUrl);
                 modelsUri = BuildModelsUri(baseUrl);
                 this.model = NormalizeModel(model);
             }
@@ -748,6 +757,7 @@ namespace RadEdit
             public void UpdateConfiguration(string baseUrl, string model)
             {
                 completionsUri = BuildCompletionsUri(baseUrl);
+                responsesUri = BuildResponsesUri(baseUrl);
                 modelsUri = BuildModelsUri(baseUrl);
                 this.model = NormalizeModel(model);
             }
@@ -807,11 +817,35 @@ namespace RadEdit
 
             public async Task<string> CorrectSentenceAsync(string sentence, CancellationToken cancellationToken)
             {
+                if (ShouldUseResponsesApi())
+                {
+                    try
+                    {
+                        return await CorrectSentenceWithResponsesAsync(sentence, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        LogDebug(
+                            "LLM responses API failed; falling back to completions API. "
+                            + "Model=" + model
+                            + " Error=" + ex.Message);
+                    }
+                }
+
+                return await CorrectSentenceWithCompletionsAsync(sentence, cancellationToken).ConfigureAwait(false);
+            }
+
+            private async Task<string> CorrectSentenceWithCompletionsAsync(string sentence, CancellationToken cancellationToken)
+            {
                 string sanitizedSentence = sentence?.Trim() ?? string.Empty;
                 if (string.IsNullOrEmpty(sanitizedSentence))
                 {
                     return string.Empty;
                 }
+
+                using var requestTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                requestTimeoutCts.CancelAfter(TimeSpan.FromSeconds(LlmProofingTimeoutSeconds));
+                CancellationToken requestToken = requestTimeoutCts.Token;
 
                 Uri requestUri = completionsUri;
                 string requestModel = model;
@@ -821,41 +855,255 @@ namespace RadEdit
                     ["prompt"] = BuildPrompt(sanitizedSentence),
                     ["temperature"] = 0,
                     ["stream"] = false,
-                    ["max_tokens"] = Math.Max(80, Math.Min(256, sanitizedSentence.Length * 3))
+                    ["max_tokens"] = GetMaxOutputTokens(sanitizedSentence)
                 };
 
                 LogDebug(
-                    "LLM HTTP request. "
+                    "LLM HTTP request prepared. "
+                    + "Api=completions "
                     + "Model=" + requestModel
                     + " Uri=" + requestUri
                     + " Sentence=" + FormatTextForLog(sanitizedSentence, 400));
-                using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-                using var response = await httpClient.PostAsync(requestUri, content, cancellationToken);
-                string rawResponse = await response.Content.ReadAsStringAsync(cancellationToken);
+                try
+                {
+                    await ApplyConfiguredDebugDelayAsync(sanitizedSentence, requestToken).ConfigureAwait(false);
+                    using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
+                    LogDebug(
+                        "LLM HTTP POST starting. "
+                        + "Api=completions "
+                        + "Model=" + requestModel
+                        + " Uri=" + requestUri
+                        + " Sentence=" + FormatTextForLog(sanitizedSentence, 400));
+                    using var response = await httpClient.PostAsync(requestUri, content, requestToken);
+                    string rawResponse = await response.Content.ReadAsStringAsync(requestToken);
+                    LogDebug(
+                        "LLM HTTP response. "
+                        + "Model=" + requestModel
+                        + " Status=" + (int)response.StatusCode
+                        + " Body=" + FormatTextForLog(rawResponse, 500));
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        throw new InvalidOperationException(
+                            $"LLM HTTP {(int)response.StatusCode} {response.ReasonPhrase}. Body={FormatTextForLog(rawResponse)}");
+                    }
+
+                    using var doc = JsonDocument.Parse(rawResponse);
+                    if (!doc.RootElement.TryGetProperty("choices", out JsonElement choices) ||
+                        choices.ValueKind != JsonValueKind.Array ||
+                        choices.GetArrayLength() == 0)
+                    {
+                        throw new InvalidOperationException("LLM response did not include a completion choice.");
+                    }
+
+                    JsonElement firstChoice = choices[0];
+                    string raw = firstChoice.TryGetProperty("text", out JsonElement textElement)
+                        ? textElement.GetString() ?? string.Empty
+                        : string.Empty;
+
+                    return ResolveCorrectionOrOriginal(sanitizedSentence, requestModel, raw);
+                }
+                catch (OperationCanceledException) when (requestToken.IsCancellationRequested)
+                {
+                    LogDebug(
+                        "LLM HTTP request canceled before client received a response. "
+                        + "Api=completions "
+                        + "ExternalCancellation=" + cancellationToken.IsCancellationRequested
+                        + " TimeoutCancellation=" + (!cancellationToken.IsCancellationRequested && requestTimeoutCts.IsCancellationRequested)
+                        + " Model=" + requestModel
+                        + " Sentence=" + FormatTextForLog(sanitizedSentence, 400));
+                    throw;
+                }
+            }
+
+            private async Task<string> CorrectSentenceWithResponsesAsync(string sentence, CancellationToken cancellationToken)
+            {
+                string sanitizedSentence = sentence?.Trim() ?? string.Empty;
+                if (string.IsNullOrEmpty(sanitizedSentence))
+                {
+                    return string.Empty;
+                }
+
+                using var requestTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                requestTimeoutCts.CancelAfter(TimeSpan.FromSeconds(LlmProofingTimeoutSeconds));
+                CancellationToken requestToken = requestTimeoutCts.Token;
+
+                Uri requestUri = responsesUri;
+                string requestModel = model;
+                string baseResponseId = await GetOrCreateResponsesBaseResponseIdAsync(requestModel, requestToken).ConfigureAwait(false);
+                var payload = new JsonObject
+                {
+                    ["model"] = requestModel,
+                    ["previous_response_id"] = baseResponseId,
+                    ["input"] = BuildResponsesInput(sanitizedSentence),
+                    ["temperature"] = 0,
+                    ["stream"] = false,
+                    ["max_output_tokens"] = GetMaxOutputTokens(sanitizedSentence)
+                };
+
                 LogDebug(
-                    "LLM HTTP response. "
+                    "LLM HTTP request prepared. "
+                    + "Api=responses "
                     + "Model=" + requestModel
-                    + " Status=" + (int)response.StatusCode
-                    + " Body=" + FormatTextForLog(rawResponse, 500));
-                if (!response.IsSuccessStatusCode)
+                    + " Uri=" + requestUri
+                    + " PreviousResponseId=" + baseResponseId
+                    + " Sentence=" + FormatTextForLog(sanitizedSentence, 400));
+                try
                 {
-                    throw new InvalidOperationException(
-                        $"LLM HTTP {(int)response.StatusCode} {response.ReasonPhrase}. Body={FormatTextForLog(rawResponse)}");
+                    await ApplyConfiguredDebugDelayAsync(sanitizedSentence, requestToken).ConfigureAwait(false);
+                    using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
+                    LogDebug(
+                        "LLM HTTP POST starting. "
+                        + "Api=responses "
+                        + "Model=" + requestModel
+                        + " Uri=" + requestUri
+                        + " PreviousResponseId=" + baseResponseId
+                        + " Sentence=" + FormatTextForLog(sanitizedSentence, 400));
+                    using var response = await httpClient.PostAsync(requestUri, content, requestToken);
+                    string rawResponse = await response.Content.ReadAsStringAsync(requestToken);
+                    LogDebug(
+                        "LLM HTTP response. "
+                        + "Api=responses "
+                        + "Model=" + requestModel
+                        + " Status=" + (int)response.StatusCode
+                        + " " + FormatResponsesMetadataForLog(rawResponse)
+                        + " Body=" + FormatTextForLog(rawResponse, 500));
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        ClearCachedResponsesBaseResponseId(baseResponseId);
+                        throw new InvalidOperationException(
+                            $"LLM responses HTTP {(int)response.StatusCode} {response.ReasonPhrase}. Body={FormatTextForLog(rawResponse)}");
+                    }
+
+                    using var doc = JsonDocument.Parse(rawResponse);
+                    if (!TryExtractResponsesOutputText(doc.RootElement, out string raw))
+                    {
+                        throw new InvalidOperationException("LLM responses output did not include usable output text.");
+                    }
+
+                    return ResolveCorrectionOrOriginal(sanitizedSentence, requestModel, raw);
+                }
+                catch (OperationCanceledException) when (requestToken.IsCancellationRequested)
+                {
+                    LogDebug(
+                        "LLM HTTP request canceled before client received a response. "
+                        + "Api=responses "
+                        + "ExternalCancellation=" + cancellationToken.IsCancellationRequested
+                        + " TimeoutCancellation=" + (!cancellationToken.IsCancellationRequested && requestTimeoutCts.IsCancellationRequested)
+                        + " Model=" + requestModel
+                        + " PreviousResponseId=" + baseResponseId
+                        + " Sentence=" + FormatTextForLog(sanitizedSentence, 400));
+                    throw;
+                }
+            }
+
+            private async Task<string> GetOrCreateResponsesBaseResponseIdAsync(string requestModel, CancellationToken cancellationToken)
+            {
+                string instructions = BuildPromptInstructions();
+                string cacheKey = responsesUri + "\n" + requestModel + "\n" + instructions;
+                lock (ResponsesBaseSync)
+                {
+                    if (string.Equals(cachedResponsesBaseKey, cacheKey, StringComparison.Ordinal) &&
+                        !string.IsNullOrWhiteSpace(cachedResponsesBaseResponseId))
+                    {
+                        LogDebug(
+                            "LLM responses base cache hit. "
+                            + "Model=" + requestModel
+                            + " Uri=" + responsesUri
+                            + " ResponseId=" + cachedResponsesBaseResponseId);
+                        return cachedResponsesBaseResponseId;
+                    }
                 }
 
-                using var doc = JsonDocument.Parse(rawResponse);
-                if (!doc.RootElement.TryGetProperty("choices", out JsonElement choices) ||
-                    choices.ValueKind != JsonValueKind.Array ||
-                    choices.GetArrayLength() == 0)
+                await ResponsesBaseInitializationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+                try
                 {
-                    throw new InvalidOperationException("LLM response did not include a completion choice.");
+                    lock (ResponsesBaseSync)
+                    {
+                        if (string.Equals(cachedResponsesBaseKey, cacheKey, StringComparison.Ordinal) &&
+                            !string.IsNullOrWhiteSpace(cachedResponsesBaseResponseId))
+                        {
+                            LogDebug(
+                                "LLM responses base cache hit after wait. "
+                                + "Model=" + requestModel
+                                + " Uri=" + responsesUri
+                                + " ResponseId=" + cachedResponsesBaseResponseId);
+                            return cachedResponsesBaseResponseId;
+                        }
+                    }
+
+                    var payload = new JsonObject
+                    {
+                        ["model"] = requestModel,
+                        ["instructions"] = instructions,
+                        ["input"] = "Réponds exactement READY et rien d'autre.",
+                        ["temperature"] = 0,
+                        ["max_output_tokens"] = 8
+                    };
+
+                    LogDebug(
+                        "LLM responses base init POST starting. "
+                        + "Model=" + requestModel
+                        + " Uri=" + responsesUri);
+                    using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
+                    using var response = await httpClient.PostAsync(responsesUri, content, cancellationToken).ConfigureAwait(false);
+                    string rawResponse = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                    LogDebug(
+                        "LLM responses base init response. "
+                        + "Model=" + requestModel
+                        + " Status=" + (int)response.StatusCode
+                        + " " + FormatResponsesMetadataForLog(rawResponse)
+                        + " Body=" + FormatTextForLog(rawResponse, 500));
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        throw new InvalidOperationException(
+                            $"LLM responses base init HTTP {(int)response.StatusCode} {response.ReasonPhrase}. Body={FormatTextForLog(rawResponse)}");
+                    }
+
+                    using var doc = JsonDocument.Parse(rawResponse);
+                    if (!TryGetResponsesResponseId(doc.RootElement, out string responseId))
+                    {
+                        throw new InvalidOperationException("LLM responses base init did not return a response id.");
+                    }
+
+                    lock (ResponsesBaseSync)
+                    {
+                        cachedResponsesBaseKey = cacheKey;
+                        cachedResponsesBaseResponseId = responseId;
+                    }
+
+                    LogDebug(
+                        "LLM responses base initialized. "
+                        + "Model=" + requestModel
+                        + " Uri=" + responsesUri
+                        + " ResponseId=" + responseId);
+                    return responseId;
+                }
+                finally
+                {
+                    ResponsesBaseInitializationGate.Release();
+                }
+            }
+
+            private static void ClearCachedResponsesBaseResponseId(string responseId)
+            {
+                if (string.IsNullOrWhiteSpace(responseId))
+                {
+                    return;
                 }
 
-                JsonElement firstChoice = choices[0];
-                string raw = firstChoice.TryGetProperty("text", out JsonElement textElement)
-                    ? textElement.GetString() ?? string.Empty
-                    : string.Empty;
+                lock (ResponsesBaseSync)
+                {
+                    if (string.Equals(cachedResponsesBaseResponseId, responseId, StringComparison.Ordinal))
+                    {
+                        cachedResponsesBaseKey = null;
+                        cachedResponsesBaseResponseId = null;
+                        LogDebug("LLM responses base cache cleared. ResponseId=" + responseId);
+                    }
+                }
+            }
 
+            private static string ResolveCorrectionOrOriginal(string sanitizedSentence, string requestModel, string raw)
+            {
                 if (!TryExtractCorrectionResponse(raw, out LlmCorrectionResponse correction))
                 {
                     LogDebug(
@@ -885,6 +1133,64 @@ namespace RadEdit
                 return corrected;
             }
 
+            private static int GetMaxOutputTokens(string sanitizedSentence)
+            {
+                return Math.Max(80, Math.Min(256, sanitizedSentence.Length * 3));
+            }
+
+            private static async Task ApplyConfiguredDebugDelayAsync(string sentence, CancellationToken cancellationToken)
+            {
+                int delayMilliseconds = GetConfiguredDebugDelayMilliseconds();
+                if (delayMilliseconds <= 0)
+                {
+                    return;
+                }
+
+                LogDebug(
+                    "LLM debug delay before request. "
+                    + "DelayMs=" + delayMilliseconds.ToString(CultureInfo.InvariantCulture)
+                    + " Sentence=" + FormatTextForLog(sentence, 240));
+                await Task.Delay(delayMilliseconds, cancellationToken).ConfigureAwait(false);
+            }
+
+            private static int GetConfiguredDebugDelayMilliseconds()
+            {
+                string? configured = Environment.GetEnvironmentVariable("RADEDIT_LLM_DEBUG_DELAY_MS");
+                if (string.IsNullOrWhiteSpace(configured) ||
+                    !int.TryParse(configured.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int delayMilliseconds))
+                {
+                    return 0;
+                }
+
+                return Math.Max(0, Math.Min(delayMilliseconds, 60000));
+            }
+
+            private static bool ShouldUseResponsesApi()
+            {
+                string configured = Environment.GetEnvironmentVariable(LlmApiModeEnvironmentVariable)?.Trim() ?? string.Empty;
+                if (configured.Equals(LlmCompletionsApiMode, StringComparison.OrdinalIgnoreCase) ||
+                    configured.Equals("completion", StringComparison.OrdinalIgnoreCase) ||
+                    configured.Equals("/v1/completions", StringComparison.OrdinalIgnoreCase) ||
+                    configured.Equals("v1/completions", StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+
+                if (!string.IsNullOrEmpty(configured) &&
+                    !configured.Equals(LlmResponsesApiMode, StringComparison.OrdinalIgnoreCase) &&
+                    !configured.Equals("response", StringComparison.OrdinalIgnoreCase) &&
+                    !configured.Equals("/v1/responses", StringComparison.OrdinalIgnoreCase) &&
+                    !configured.Equals("v1/responses", StringComparison.OrdinalIgnoreCase))
+                {
+                    LogDebug(
+                        "Unknown LLM API mode; using responses API. "
+                        + "EnvironmentVariable=" + LlmApiModeEnvironmentVariable
+                        + " Value=" + configured);
+                }
+
+                return true;
+            }
+
             public void Dispose()
             {
                 // Shared HttpClient intentionally lives for the process lifetime.
@@ -899,6 +1205,12 @@ namespace RadEdit
             {
                 string normalized = NormalizeBaseUrl(baseUrl);
                 return new Uri(normalized.TrimEnd('/') + "/v1/completions", UriKind.Absolute);
+            }
+
+            private static Uri BuildResponsesUri(string baseUrl)
+            {
+                string normalized = NormalizeBaseUrl(baseUrl);
+                return new Uri(normalized.TrimEnd('/') + "/v1/responses", UriKind.Absolute);
             }
 
             private static Uri BuildModelsUri(string baseUrl)
@@ -1129,6 +1441,30 @@ namespace RadEdit
                        state.Equals("active", StringComparison.OrdinalIgnoreCase);
             }
 
+            private static string BuildPromptInstructions()
+            {
+                return
+                    "Tu es un correcteur grammatical francophone très conservateur.\n"
+                    + "Corrige uniquement les accords grammaticaux de genre et de nombre.\n"
+                    + "Les seules corrections autorisées concernent les accords des noms, adjectifs, verbes et participes passés.\n"
+                    + "N'apporte aucune autre correction sauf si elle est strictement nécessaire pour appliquer correctement ces accords.\n"
+                    + "Ne reformule pas.\n"
+                    + "Ne change pas le vocabulaire.\n"
+                    + "Conserve le ton, l'ordre des mots et les termes médicaux.\n"
+                    + "Si aucune correction n'est nécessaire, ou si tu hésites, recopie la phrase strictement à l'identique.\n"
+                    + "Retourne exactement un objet JSON sur une seule ligne au format {\"agreementChanged\":true|false,\"corrected\":\"...\"}.\n"
+                    + "agreementChanged vaut true uniquement si tu as corrigé au moins un accord de genre ou de nombre d'un nom, adjectif, verbe ou participe passé.\n"
+                    + "agreementChanged vaut false dans tous les autres cas, et alors corrected doit recopier la phrase strictement à l'identique.\n";
+            }
+
+            private static string BuildResponsesInput(string sentence)
+            {
+                return
+                    "Phrase:\n<<<\n"
+                    + sentence
+                    + "\n>>>";
+            }
+
             private static string BuildPrompt(string sentence)
             {
                 return
@@ -1146,6 +1482,144 @@ namespace RadEdit
                     + "Phrase:\n<<<\n"
                     + sentence
                     + "\n>>>";
+            }
+
+            private static bool TryGetResponsesResponseId(JsonElement rootElement, out string responseId)
+            {
+                foreach (string propertyName in new[] { "id", "response_id" })
+                {
+                    if (rootElement.TryGetProperty(propertyName, out JsonElement valueElement) &&
+                        valueElement.ValueKind == JsonValueKind.String)
+                    {
+                        responseId = valueElement.GetString()?.Trim() ?? string.Empty;
+                        return !string.IsNullOrWhiteSpace(responseId);
+                    }
+                }
+
+                responseId = string.Empty;
+                return false;
+            }
+
+            private static bool TryExtractResponsesOutputText(JsonElement rootElement, out string outputText)
+            {
+                if (rootElement.TryGetProperty("output_text", out JsonElement outputTextElement) &&
+                    outputTextElement.ValueKind == JsonValueKind.String)
+                {
+                    outputText = outputTextElement.GetString() ?? string.Empty;
+                    return !string.IsNullOrWhiteSpace(outputText);
+                }
+
+                if (!rootElement.TryGetProperty("output", out JsonElement outputElement) ||
+                    outputElement.ValueKind != JsonValueKind.Array)
+                {
+                    outputText = string.Empty;
+                    return false;
+                }
+
+                var builder = new StringBuilder();
+                foreach (JsonElement outputItem in outputElement.EnumerateArray())
+                {
+                    if (outputItem.ValueKind != JsonValueKind.Object ||
+                        !outputItem.TryGetProperty("content", out JsonElement contentElement) ||
+                        contentElement.ValueKind != JsonValueKind.Array)
+                    {
+                        continue;
+                    }
+
+                    foreach (JsonElement contentItem in contentElement.EnumerateArray())
+                    {
+                        if (contentItem.ValueKind == JsonValueKind.Object &&
+                            contentItem.TryGetProperty("text", out JsonElement textElement) &&
+                            textElement.ValueKind == JsonValueKind.String)
+                        {
+                            builder.Append(textElement.GetString());
+                        }
+                    }
+                }
+
+                outputText = builder.ToString();
+                return !string.IsNullOrWhiteSpace(outputText);
+            }
+
+            private static string FormatResponsesMetadataForLog(string rawResponse)
+            {
+                if (string.IsNullOrWhiteSpace(rawResponse))
+                {
+                    return string.Empty;
+                }
+
+                try
+                {
+                    using var doc = JsonDocument.Parse(rawResponse);
+                    var parts = new List<string>();
+                    if (TryGetResponsesResponseId(doc.RootElement, out string responseId))
+                    {
+                        parts.Add("ResponseId=" + responseId);
+                    }
+                    if (TryGetStringProperty(doc.RootElement, "previous_response_id", out string previousResponseId))
+                    {
+                        parts.Add("PreviousResponseId=" + previousResponseId);
+                    }
+                    if (TryGetNestedIntProperty(doc.RootElement, out int inputTokens, "usage", "input_tokens"))
+                    {
+                        parts.Add("InputTokens=" + inputTokens.ToString(CultureInfo.InvariantCulture));
+                    }
+                    if (TryGetNestedIntProperty(doc.RootElement, out int outputTokens, "usage", "output_tokens"))
+                    {
+                        parts.Add("OutputTokens=" + outputTokens.ToString(CultureInfo.InvariantCulture));
+                    }
+                    if (TryGetNestedIntProperty(doc.RootElement, out int cachedTokens, "usage", "input_tokens_details", "cached_tokens"))
+                    {
+                        parts.Add("CachedTokens=" + cachedTokens.ToString(CultureInfo.InvariantCulture));
+                    }
+                    if (TryGetNestedIntProperty(doc.RootElement, out int reasoningTokens, "usage", "output_tokens_details", "reasoning_tokens"))
+                    {
+                        parts.Add("ReasoningTokens=" + reasoningTokens.ToString(CultureInfo.InvariantCulture));
+                    }
+
+                    return string.Join(" ", parts);
+                }
+                catch
+                {
+                    return string.Empty;
+                }
+            }
+
+            private static bool TryGetStringProperty(JsonElement rootElement, string propertyName, out string value)
+            {
+                if (rootElement.ValueKind == JsonValueKind.Object &&
+                    rootElement.TryGetProperty(propertyName, out JsonElement valueElement) &&
+                    valueElement.ValueKind == JsonValueKind.String)
+                {
+                    value = valueElement.GetString()?.Trim() ?? string.Empty;
+                    return !string.IsNullOrWhiteSpace(value);
+                }
+
+                value = string.Empty;
+                return false;
+            }
+
+            private static bool TryGetNestedIntProperty(JsonElement rootElement, out int value, params string[] propertyPath)
+            {
+                JsonElement current = rootElement;
+                foreach (string propertyName in propertyPath)
+                {
+                    if (current.ValueKind != JsonValueKind.Object ||
+                        !current.TryGetProperty(propertyName, out current))
+                    {
+                        value = 0;
+                        return false;
+                    }
+                }
+
+                if (current.ValueKind == JsonValueKind.Number &&
+                    current.TryGetInt32(out value))
+                {
+                    return true;
+                }
+
+                value = 0;
+                return false;
             }
 
             private static bool TryExtractCorrectionResponse(string raw, out LlmCorrectionResponse response)
@@ -1369,8 +1843,14 @@ namespace RadEdit
         private const int LlmFollowUpDebounceMs = 250;
         private const int MaxNewLlmUnitsPerPass = 1;
         private const int LanguageToolTimeoutSeconds = 25;
+        private const int LlmProofingTimeoutSeconds = 6;
         private const int LanguageToolStartupProbeTimeoutSeconds = 3;
         private const string LanguageToolStartupProbeText = "Bonjour.";
+        private const int UiHeartbeatIntervalMs = 500;
+        private const int UiWatchdogIntervalMs = 1000;
+        private const int UiWatchdogStallThresholdMs = 3000;
+        private const int UiWatchdogRepeatLogMs = 5000;
+        private const int UiHeartbeatSlowGapMs = 1500;
         private static readonly string[] LanguageToolEnabledCategories =
         {
             "CAT_REGLES_DE_BASE",
@@ -1456,6 +1936,14 @@ namespace RadEdit
         private readonly List<string> availableLlmModels = new();
         private readonly Dictionary<string, string> availableLlmModelDisplayNames = new(StringComparer.Ordinal);
         private int suppressProofingForCopyDataDepth;
+        private readonly System.Windows.Forms.Timer uiHeartbeatTimer = new();
+        private System.Threading.Timer? uiWatchdogTimer;
+        private long lastUiHeartbeatTicks;
+        private long lastUiWatchdogLogTicks;
+        private long currentUiOperationStartTicks;
+        private int uiWatchdogStallActive;
+        private string currentUiOperation = "startup";
+        private string lastUiDiagnosticSnapshot = string.Empty;
         private bool hotkeyApplyRegistered;
         private bool hotkeyIgnoreRegistered;
         private readonly ContextMenuStrip snippetMenu = new();
@@ -1513,6 +2001,284 @@ namespace RadEdit
             checkBoxLtEnabled.Checked = languageToolEnabled;
             UpdateLanguageToolStatus(languageToolEnabled ? languageToolStatusText : "disabled");
             UpdateLanguageToolBarState();
+            ConfigureDebugDiagnostics();
+        }
+
+        private void ConfigureDebugDiagnostics()
+        {
+            if (!RadEditDebugLog.IsEnabled)
+            {
+                return;
+            }
+
+            long now = Stopwatch.GetTimestamp();
+            Interlocked.Exchange(ref lastUiHeartbeatTicks, now);
+            Interlocked.Exchange(ref currentUiOperationStartTicks, now);
+            Volatile.Write(ref currentUiOperation, "idle");
+            lastUiDiagnosticSnapshot = BuildUiDiagnosticSnapshotForLog();
+
+            uiHeartbeatTimer.Interval = UiHeartbeatIntervalMs;
+            uiHeartbeatTimer.Tick += UiHeartbeatTimer_Tick;
+            uiHeartbeatTimer.Start();
+            uiWatchdogTimer = new System.Threading.Timer(
+                UiWatchdogTimer_Tick,
+                null,
+                UiWatchdogIntervalMs,
+                UiWatchdogIntervalMs);
+
+            Activated += (_, _) => LogFocusDiagnostic("Form.Activated");
+            Deactivate += (_, _) => LogFocusDiagnostic("Form.Deactivate");
+            richTextBox1.GotFocus += (_, _) => LogFocusDiagnostic("RichTextBox.GotFocus");
+            richTextBox1.LostFocus += (_, _) => LogFocusDiagnostic("RichTextBox.LostFocus");
+            richTextBox1.Enter += (_, _) => LogFocusDiagnostic("RichTextBox.Enter");
+            richTextBox1.Leave += (_, _) => LogFocusDiagnostic("RichTextBox.Leave");
+            richTextBox1.HandleCreated += (_, _) => LogFocusDiagnostic("RichTextBox.HandleCreated");
+            richTextBox1.HandleDestroyed += (_, _) => LogFocusDiagnostic("RichTextBox.HandleDestroyed");
+
+            LogDebug(
+                "Debug diagnostics enabled. "
+                + "Version=" + GetAppVersion()
+                + " ProcessId=" + Environment.ProcessId.ToString(CultureInfo.InvariantCulture)
+                + " LogPath=" + RadEditDebugLog.LogPath
+                + " Snapshot=" + lastUiDiagnosticSnapshot
+                + " Foreground=" + DescribeForegroundWindowForLog());
+        }
+
+        private void UiHeartbeatTimer_Tick(object? sender, EventArgs e)
+        {
+            using IDisposable _ = BeginUiOperation("UiHeartbeatTimer_Tick");
+            long now = Stopwatch.GetTimestamp();
+            long previous = Interlocked.Exchange(ref lastUiHeartbeatTicks, now);
+            long gapMilliseconds = previous == 0 ? 0 : GetElapsedMilliseconds(previous, now);
+            lastUiDiagnosticSnapshot = BuildUiDiagnosticSnapshotForLog();
+
+            if (gapMilliseconds >= UiHeartbeatSlowGapMs)
+            {
+                LogDebug(
+                    "UI_HEARTBEAT_GAP. "
+                    + "GapMs=" + gapMilliseconds.ToString(CultureInfo.InvariantCulture)
+                    + " Snapshot=" + lastUiDiagnosticSnapshot
+                    + " Foreground=" + DescribeForegroundWindowForLog());
+            }
+
+            if (Interlocked.Exchange(ref uiWatchdogStallActive, 0) != 0)
+            {
+                LogDebug(
+                    "UI_PUMP_RESPONSIVE_AGAIN. "
+                    + "GapMs=" + gapMilliseconds.ToString(CultureInfo.InvariantCulture)
+                    + " Snapshot=" + lastUiDiagnosticSnapshot
+                    + " Foreground=" + DescribeForegroundWindowForLog());
+            }
+        }
+
+        private void UiWatchdogTimer_Tick(object? state)
+        {
+            long lastHeartbeat = Interlocked.Read(ref lastUiHeartbeatTicks);
+            if (lastHeartbeat == 0)
+            {
+                return;
+            }
+
+            long now = Stopwatch.GetTimestamp();
+            long gapMilliseconds = GetElapsedMilliseconds(lastHeartbeat, now);
+            if (gapMilliseconds < UiWatchdogStallThresholdMs)
+            {
+                return;
+            }
+
+            long lastLog = Interlocked.Read(ref lastUiWatchdogLogTicks);
+            if (lastLog != 0 && GetElapsedMilliseconds(lastLog, now) < UiWatchdogRepeatLogMs)
+            {
+                return;
+            }
+
+            Interlocked.Exchange(ref lastUiWatchdogLogTicks, now);
+            Interlocked.Exchange(ref uiWatchdogStallActive, 1);
+
+            string operation = Volatile.Read(ref currentUiOperation) ?? "unknown";
+            long operationStart = Interlocked.Read(ref currentUiOperationStartTicks);
+            long operationAgeMilliseconds = operationStart == 0 ? 0 : GetElapsedMilliseconds(operationStart, now);
+            string snapshot = Volatile.Read(ref lastUiDiagnosticSnapshot) ?? string.Empty;
+
+            RadEditDebugLog.Write(
+                "UI_PUMP_STALL suspected. "
+                + "NoHeartbeatMs=" + gapMilliseconds.ToString(CultureInfo.InvariantCulture)
+                + " CurrentUiOperation=" + operation
+                + " CurrentUiOperationAgeMs=" + operationAgeMilliseconds.ToString(CultureInfo.InvariantCulture)
+                + " Snapshot=" + snapshot
+                + " Foreground=" + DescribeForegroundWindowForLog()
+                + " ThreadPool=" + DescribeThreadPoolForLog()
+                + " Process=" + DescribeProcessForLog());
+        }
+
+        private IDisposable BeginUiOperation(string operation)
+        {
+            if (!RadEditDebugLog.IsEnabled)
+            {
+                return UiOperationScope.Empty;
+            }
+
+            return new UiOperationScope(this, operation);
+        }
+
+        private string ReadCurrentUiOperation()
+        {
+            return Volatile.Read(ref currentUiOperation) ?? "unknown";
+        }
+
+        private long ReadCurrentUiOperationStartTicks()
+        {
+            return Interlocked.Read(ref currentUiOperationStartTicks);
+        }
+
+        private void SetCurrentUiOperation(string operation, long startTicks)
+        {
+            Volatile.Write(ref currentUiOperation, operation);
+            Interlocked.Exchange(ref currentUiOperationStartTicks, startTicks);
+        }
+
+        private sealed class UiOperationScope : IDisposable
+        {
+            public static readonly IDisposable Empty = new UiOperationScope();
+
+            private readonly Form1? owner;
+            private readonly string previousOperation = string.Empty;
+            private readonly long previousOperationStartTicks;
+            private bool disposed;
+
+            private UiOperationScope()
+            {
+            }
+
+            public UiOperationScope(Form1 owner, string operation)
+            {
+                this.owner = owner;
+                previousOperation = owner.ReadCurrentUiOperation();
+                previousOperationStartTicks = owner.ReadCurrentUiOperationStartTicks();
+                owner.SetCurrentUiOperation(operation, Stopwatch.GetTimestamp());
+            }
+
+            public void Dispose()
+            {
+                if (disposed || owner == null)
+                {
+                    return;
+                }
+
+                disposed = true;
+                owner.SetCurrentUiOperation(previousOperation, previousOperationStartTicks);
+            }
+        }
+
+        private string BuildUiDiagnosticSnapshotForLog()
+        {
+            return "TextLength=" + richTextBox1.TextLength.ToString(CultureInfo.InvariantCulture)
+                + " SelectionStart=" + richTextBox1.SelectionStart.ToString(CultureInfo.InvariantCulture)
+                + " SelectionLength=" + richTextBox1.SelectionLength.ToString(CultureInfo.InvariantCulture)
+                + " RichFocused=" + richTextBox1.Focused
+                + " RichContainsFocus=" + richTextBox1.ContainsFocus
+                + " FormContainsFocus=" + ContainsFocus
+                + " ActiveControl=" + (ActiveControl?.Name ?? "none")
+                + " ProofEnabled=" + languageToolEnabled
+                + " Provider=" + activeProofingProvider
+                + " Busy=" + languageToolBusy
+                + " PendingLength=" + pendingLanguageToolText.Length.ToString(CultureInfo.InvariantCulture)
+                + " PendingForce=" + pendingLanguageToolForce
+                + " Revision=" + proofingTextRevision.ToString(CultureInfo.InvariantCulture)
+                + " Issues=" + languageToolIssues.Count.ToString(CultureInfo.InvariantCulture)
+                + " LlmLoaded=" + llmLoadedModelAvailable
+                + " LlmDiscoveryBusy=" + llmModelDiscoveryBusy
+                + " LlmRunPending=" + llmProofingRunPending
+                + " WindowState=" + WindowState;
+        }
+
+        private void LogFocusDiagnostic(string eventName)
+        {
+            if (!RadEditDebugLog.IsEnabled)
+            {
+                return;
+            }
+
+            lastUiDiagnosticSnapshot = BuildUiDiagnosticSnapshotForLog();
+            LogDebug(
+                "FOCUS " + eventName
+                + " Snapshot=" + lastUiDiagnosticSnapshot
+                + " Foreground=" + DescribeForegroundWindowForLog());
+        }
+
+        private static string DescribeThreadPoolForLog()
+        {
+            ThreadPool.GetAvailableThreads(out int workerAvailable, out int completionAvailable);
+            ThreadPool.GetMaxThreads(out int workerMax, out int completionMax);
+            return "WorkerAvailable=" + workerAvailable.ToString(CultureInfo.InvariantCulture)
+                + "/" + workerMax.ToString(CultureInfo.InvariantCulture)
+                + " CompletionAvailable=" + completionAvailable.ToString(CultureInfo.InvariantCulture)
+                + "/" + completionMax.ToString(CultureInfo.InvariantCulture);
+        }
+
+        private static string DescribeProcessForLog()
+        {
+            try
+            {
+                using Process process = Process.GetCurrentProcess();
+                return "WorkingSetMb=" + (process.WorkingSet64 / (1024 * 1024)).ToString(CultureInfo.InvariantCulture)
+                    + " PrivateMb=" + (process.PrivateMemorySize64 / (1024 * 1024)).ToString(CultureInfo.InvariantCulture)
+                    + " Threads=" + process.Threads.Count.ToString(CultureInfo.InvariantCulture)
+                    + " Handles=" + process.HandleCount.ToString(CultureInfo.InvariantCulture);
+            }
+            catch (Exception ex)
+            {
+                return "unavailable:" + ex.Message;
+            }
+        }
+
+        private static string DescribeForegroundWindowForLog()
+        {
+            try
+            {
+                IntPtr hwnd = NativeMethods.GetForegroundWindow();
+                if (hwnd == IntPtr.Zero)
+                {
+                    return "none";
+                }
+
+                var title = new StringBuilder(256);
+                _ = NativeMethods.GetWindowText(hwnd, title, title.Capacity);
+                var className = new StringBuilder(128);
+                _ = NativeMethods.GetClassName(hwnd, className, className.Capacity);
+                _ = NativeMethods.GetWindowThreadProcessId(hwnd, out int processId);
+
+                string processName = string.Empty;
+                try
+                {
+                    using Process process = Process.GetProcessById(processId);
+                    processName = process.ProcessName;
+                }
+                catch
+                {
+                    processName = "unknown";
+                }
+
+                return "Hwnd=0x" + hwnd.ToInt64().ToString("X", CultureInfo.InvariantCulture)
+                    + " Pid=" + processId.ToString(CultureInfo.InvariantCulture)
+                    + " Process=" + processName
+                    + " Class=" + FormatTextForLog(className.ToString(), 80)
+                    + " Title=" + FormatTextForLog(title.ToString(), 160);
+            }
+            catch (Exception ex)
+            {
+                return "unavailable:" + ex.Message;
+            }
+        }
+
+        private static long GetElapsedMilliseconds(long startTimestamp, long endTimestamp)
+        {
+            if (endTimestamp <= startTimestamp)
+            {
+                return 0;
+            }
+
+            return (long)((endTimestamp - startTimestamp) * 1000.0 / Stopwatch.Frequency);
         }
 
         private void ConfigureProofingToolbarLayout()
@@ -2167,24 +2933,28 @@ namespace RadEdit
         {
             if (m.Msg == WM_COPYDATA)
             {
+                using IDisposable _ = BeginUiOperation("WndProc.WM_COPYDATA");
+                Stopwatch? copyDataStopwatch = RadEditDebugLog.StartTiming();
                 IntPtr senderHandle = m.WParam;
+                string commandName = "unread";
 
                 try
                 {
                     var copyData = NativeMethods.GetCopyData(m.LParam);
                     var command = (CopyDataCommand)copyData.dwData.ToInt64();
+                    commandName = DescribeCopyDataCommand(command);
                     string payload = NativeMethods.CopyDataToString(copyData);
                     LogDebug(
                         "WM_COPYDATA received. "
                         + "Sender=" + senderHandle
-                        + " Command=" + DescribeCopyDataCommand(command)
+                        + " Command=" + commandName
                         + " Payload=" + FormatTextForLog(payload, 400));
 
                     bool handled = HandleCopyDataCommand(command, payload, senderHandle);
                     LogDebug(
                         "WM_COPYDATA handled. "
                         + "Sender=" + senderHandle
-                        + " Command=" + DescribeCopyDataCommand(command)
+                        + " Command=" + commandName
                         + " Handled=" + handled
                         + " TextLength=" + richTextBox1.TextLength.ToString(CultureInfo.InvariantCulture));
                     m.Result = handled ? new IntPtr(1) : IntPtr.Zero;
@@ -2194,6 +2964,14 @@ namespace RadEdit
                     LogDebug("WM_COPYDATA failed. Sender=" + senderHandle + " Error=" + ex.Message);
                     NativeMethods.SendCopyData(senderHandle, CopyDataCommand.ErrorResponse, ex.Message);
                     m.Result = IntPtr.Zero;
+                }
+                finally
+                {
+                    LogSlowOperation(
+                        "WndProc.WM_COPYDATA",
+                        copyDataStopwatch,
+                        100,
+                        "Command=" + commandName + " Sender=" + senderHandle);
                 }
 
                 return;
@@ -4093,67 +4871,81 @@ namespace RadEdit
 
         private async void RichTextBox1_TextChanged(object? sender, EventArgs e)
         {
-            if (suppressRtfEvents)
-            {
-                return;
-            }
-
-            string newText = richTextBox1.Text;
-            if (suppressProofingForCopyDataDepth > 0)
-            {
-                HandleCopyDataProofingBypass(newText);
-                return;
-            }
-
-            if (allowRtfUpdatesWhileHtmlFocus || !IsHtmlMirroringAvailable())
-            {
-                HandleEditableProofingTextChanged(newText);
-                return;
-            }
-
-            string inserted = ExtractInsertedText(lastPlainText, newText);
-
-            if (string.IsNullOrEmpty(inserted))
-            {
-                LogDebug("RichTextBox1_TextChanged ignored for HTML mirroring because no inserted text was detected.");
-                return;
-            }
-
-            bool routed = false;
+            using IDisposable _ = BeginUiOperation("RichTextBox1_TextChanged");
+            Stopwatch? totalStopwatch = RadEditDebugLog.StartTiming();
             try
             {
-                routed = await SendTextToHtmlAsync(inserted);
-            }
-            catch
-            {
-                // Swallow to avoid disrupting the UI if the WebView is not ready.
-            }
+                if (suppressRtfEvents)
+                {
+                    return;
+                }
 
-            if (routed)
-            {
-                LogDebug("RichTextBox1_TextChanged routed inserted text to HTML. Inserted=" + FormatTextForLog(inserted, 320));
-                suppressRtfEvents = true;
+                string newText = richTextBox1.Text;
+                if (suppressProofingForCopyDataDepth > 0)
+                {
+                    HandleCopyDataProofingBypass(newText);
+                    return;
+                }
+
+                if (allowRtfUpdatesWhileHtmlFocus || !IsHtmlMirroringAvailable())
+                {
+                    HandleEditableProofingTextChanged(newText);
+                    return;
+                }
+
+                string inserted = ExtractInsertedText(lastPlainText, newText);
+
+                if (string.IsNullOrEmpty(inserted))
+                {
+                    LogDebug("RichTextBox1_TextChanged ignored for HTML mirroring because no inserted text was detected.");
+                    return;
+                }
+
+                bool routed = false;
                 try
                 {
-                    if (!string.Equals(richTextBox1.Rtf, lastRtfSnapshot, StringComparison.Ordinal))
+                    routed = await SendTextToHtmlAsync(inserted);
+                }
+                catch
+                {
+                    // Swallow to avoid disrupting the UI if the WebView is not ready.
+                }
+
+                if (routed)
+                {
+                    LogDebug("RichTextBox1_TextChanged routed inserted text to HTML. Inserted=" + FormatTextForLog(inserted, 320));
+                    suppressRtfEvents = true;
+                    try
                     {
-                        richTextBox1.Rtf = lastRtfSnapshot;
+                        if (!string.Equals(richTextBox1.Rtf, lastRtfSnapshot, StringComparison.Ordinal))
+                        {
+                            richTextBox1.Rtf = lastRtfSnapshot;
+                        }
+                    }
+                    finally
+                    {
+                        suppressRtfEvents = false;
                     }
                 }
-                finally
+                else
                 {
-                    suppressRtfEvents = false;
+                    LogDebug("RichTextBox1_TextChanged fell back to proofing path after HTML routing miss. Inserted=" + FormatTextForLog(inserted, 320));
+                    HandleEditableProofingTextChanged(newText);
                 }
             }
-            else
+            finally
             {
-                LogDebug("RichTextBox1_TextChanged fell back to proofing path after HTML routing miss. Inserted=" + FormatTextForLog(inserted, 320));
-                HandleEditableProofingTextChanged(newText);
+                LogSlowOperation(
+                    "RichTextBox1_TextChanged.total",
+                    totalStopwatch,
+                    100,
+                    BuildUiDiagnosticSnapshotForLog());
             }
         }
 
         private void HandleEditableProofingTextChanged(string newText)
         {
+            using IDisposable _ = BeginUiOperation("HandleEditableProofingTextChanged");
             Stopwatch? totalStopwatch = RadEditDebugLog.StartTiming();
             string previousText = lastPlainText;
             LogDebug("User text change detected. Change=" + DescribeTextChangeForLog(previousText, newText));
@@ -4190,6 +4982,7 @@ namespace RadEdit
 
         private void HandleCopyDataProofingBypass(string newText)
         {
+            using IDisposable _ = BeginUiOperation("HandleCopyDataProofingBypass");
             string previousText = lastPlainText;
             LogDebug("Trusted automation text change detected. Change=" + DescribeTextChangeForLog(previousText, newText));
             proofingDocumentState.ApplyChange(newText, ProofingChangeSource.TrustedAutomation);
@@ -4334,6 +5127,7 @@ namespace RadEdit
 
         private void ScheduleLanguageToolCheck(string text, bool force = false)
         {
+            using IDisposable _ = BeginUiOperation("ScheduleLanguageToolCheck");
             if (!languageToolEnabled)
             {
                 LogDebug("Proofing schedule skipped because proofing is disabled.");
@@ -4386,7 +5180,11 @@ namespace RadEdit
                 if (languageToolBusy)
                 {
                     llmProofingRunPending = true;
-                    LogDebug("Proofing schedule queued a follow-up because an LLM proofing run is already in progress.");
+                    bool hadActiveRequest = languageToolCts != null;
+                    CancelLanguageToolCts();
+                    LogDebug(
+                        "Proofing schedule canceled active LLM proofing request and queued a follow-up because newer text arrived. "
+                        + "CanceledActiveRequest=" + hadActiveRequest);
                 }
                 else
                 {
@@ -4623,6 +5421,7 @@ namespace RadEdit
 
         private async void LanguageToolTimer_Tick(object? sender, EventArgs e)
         {
+            using IDisposable _ = BeginUiOperation("LanguageToolTimer_Tick");
             languageToolTimer.Stop();
             LogDebug(
                 "Proofing timer tick. "
@@ -4644,6 +5443,7 @@ namespace RadEdit
 
         private async Task RunLanguageToolCheckAsync(string text, bool force = false)
         {
+            using IDisposable _ = BeginUiOperation("RunLanguageToolCheckAsync");
             if (!languageToolEnabled)
             {
                 LogDebug("Proofing check aborted because proofing is disabled.");
@@ -4881,7 +5681,7 @@ namespace RadEdit
             {
                 try
                 {
-                    batchResult = await RunLlmPreparedProofingBatchAsync(batch, cancellationToken);
+                    batchResult = await RunLlmPreparedProofingBatchOffUiThreadAsync(batch, cancellationToken);
                 }
                 catch (InvalidOperationException ex)
                 {
@@ -4913,7 +5713,7 @@ namespace RadEdit
                             batch.HasNotReadyUnits);
                     }
 
-                    batchResult = await RunLlmPreparedProofingBatchAsync(batch, cancellationToken);
+                    batchResult = await RunLlmPreparedProofingBatchOffUiThreadAsync(batch, cancellationToken);
                 }
 
                 cancellationToken.ThrowIfCancellationRequested();
@@ -4985,6 +5785,7 @@ namespace RadEdit
 
         private void RefreshTrackedLlmProofingUnits(DateTime nowUtc)
         {
+            using IDisposable _ = BeginUiOperation("RefreshTrackedLlmProofingUnits");
             Stopwatch? buildUnitsStopwatch = RadEditDebugLog.StartTiming();
             List<ProofingUnit> units = proofingDocumentState.BuildLlmProofingUnits();
             LogSlowOperation(
@@ -5235,6 +6036,84 @@ namespace RadEdit
                 requests,
                 deferredUnitCount > 0,
                 notReadyUnitCount > 0);
+        }
+
+        private async Task<LlmPreparedProofingBatchResult> RunLlmPreparedProofingBatchOffUiThreadAsync(
+            LlmPreparedProofingBatch batch,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            // HttpClient can do synchronous connection setup before its first await; keep that off the UI thread.
+            Task<LlmPreparedProofingBatchResult> workerTask = Task.Run(
+                async () => await RunLlmPreparedProofingBatchAsync(batch, cancellationToken).ConfigureAwait(false));
+
+            TimeSpan waitTimeout = TimeSpan.FromSeconds(LlmProofingTimeoutSeconds + 1);
+            try
+            {
+                return await workerTask.WaitAsync(waitTimeout, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested && !workerTask.IsCompleted)
+            {
+                ObserveAbandonedLlmProofingTask(workerTask, batch, "canceled");
+                LogDebug(
+                    "LLM prepared batch wait canceled; background HTTP worker will be observed. "
+                    + "Revision=" + batch.Revision.ToString(CultureInfo.InvariantCulture)
+                    + " Requests=" + batch.Requests.Count.ToString(CultureInfo.InvariantCulture));
+                throw;
+            }
+            catch (TimeoutException) when (!workerTask.IsCompleted)
+            {
+                ObserveAbandonedLlmProofingTask(workerTask, batch, "wait-timeout");
+                LogDebug(
+                    "LLM prepared batch wait timed out; background HTTP worker will be observed. "
+                    + "TimeoutMs=" + ((int)waitTimeout.TotalMilliseconds).ToString(CultureInfo.InvariantCulture)
+                    + " Revision=" + batch.Revision.ToString(CultureInfo.InvariantCulture)
+                    + " Requests=" + batch.Requests.Count.ToString(CultureInfo.InvariantCulture));
+                throw new TaskCanceledException(
+                    "LLM proofing batch wait timed out after "
+                    + ((int)waitTimeout.TotalMilliseconds).ToString(CultureInfo.InvariantCulture)
+                    + " ms.");
+            }
+        }
+
+        private static void ObserveAbandonedLlmProofingTask(
+            Task<LlmPreparedProofingBatchResult> task,
+            LlmPreparedProofingBatch batch,
+            string reason)
+        {
+            _ = ObserveAbandonedLlmProofingTaskAsync(task, batch, reason);
+        }
+
+        private static async Task ObserveAbandonedLlmProofingTaskAsync(
+            Task<LlmPreparedProofingBatchResult> task,
+            LlmPreparedProofingBatch batch,
+            string reason)
+        {
+            try
+            {
+                LlmPreparedProofingBatchResult result = await task.ConfigureAwait(false);
+                LogDebug(
+                    "LLM background HTTP worker completed after caller stopped waiting. "
+                    + "Reason=" + reason
+                    + " Revision=" + batch.Revision.ToString(CultureInfo.InvariantCulture)
+                    + " Responses=" + result.Responses.Count.ToString(CultureInfo.InvariantCulture));
+            }
+            catch (OperationCanceledException ex)
+            {
+                LogDebug(
+                    "LLM background HTTP worker canceled after caller stopped waiting. "
+                    + "Reason=" + reason
+                    + " Revision=" + batch.Revision.ToString(CultureInfo.InvariantCulture)
+                    + " Error=" + ex.Message);
+            }
+            catch (Exception ex)
+            {
+                LogDebug(
+                    "LLM background HTTP worker faulted after caller stopped waiting. "
+                    + "Reason=" + reason
+                    + " Revision=" + batch.Revision.ToString(CultureInfo.InvariantCulture)
+                    + " Error=" + ex.Message);
+            }
         }
 
         private async Task<LlmPreparedProofingBatchResult> RunLlmPreparedProofingBatchAsync(
@@ -6017,6 +6896,7 @@ namespace RadEdit
 
         private void SetLanguageToolIssues(List<LanguageToolIssue> issues)
         {
+            using IDisposable _ = BeginUiOperation("SetLanguageToolIssues");
             Stopwatch? totalStopwatch = RadEditDebugLog.StartTiming();
             languageToolIssues.Clear();
             languageToolIssues.AddRange(issues);
@@ -6898,6 +7778,7 @@ namespace RadEdit
 
         private void UpdateLanguageToolHighlightRanges(string newText)
         {
+            using IDisposable _ = BeginUiOperation("UpdateLanguageToolHighlightRanges");
             Stopwatch? totalStopwatch = RadEditDebugLog.StartTiming();
             string oldText = languageToolHighlightSnapshotText;
             if (string.Equals(oldText, newText, StringComparison.Ordinal))
@@ -7082,6 +7963,7 @@ namespace RadEdit
 
         private void ApplyLanguageToolHighlights(IEnumerable<LanguageToolIssue> issues)
         {
+            using IDisposable _ = BeginUiOperation("ApplyLanguageToolHighlights");
             if (richTextBox1.TextLength == 0)
             {
                 return;
@@ -9133,6 +10015,8 @@ namespace RadEdit
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             isClosing = true;
+            uiHeartbeatTimer.Stop();
+            uiWatchdogTimer?.Dispose();
             appConfigSaveTimer.Stop();
             foreach (var host in webViewPopupHosts.ToArray())
             {
@@ -9146,6 +10030,7 @@ namespace RadEdit
             SaveProofingSettings();
             appConfigSaveTimer.Dispose();
             languageToolTimer.Dispose();
+            uiHeartbeatTimer.Dispose();
             languageToolClient.Dispose();
             llmProofreadClient.Dispose();
             languageToolHoverMenu.Dispose();
@@ -9221,6 +10106,18 @@ namespace RadEdit
 
             [DllImport("user32.dll", SetLastError = true)]
             internal static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+
+            [DllImport("user32.dll")]
+            internal static extern IntPtr GetForegroundWindow();
+
+            [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+            internal static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int maxCount);
+
+            [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+            internal static extern int GetClassName(IntPtr hWnd, StringBuilder className, int maxCount);
+
+            [DllImport("user32.dll", SetLastError = true)]
+            internal static extern int GetWindowThreadProcessId(IntPtr hWnd, out int processId);
 
             internal static CopyDataStruct GetCopyData(IntPtr pointer)
             {

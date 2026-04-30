@@ -1,5 +1,16 @@
 # Version Log
 
+## v0.2.10 - 2026-04-29
+
+Changes since the previous version:
+
+- Switched the default local LLM proofing transport from `/v1/completions` to `/v1/responses`, initializing a cached base response for the fixed proofreading instructions and branching each sentence request from that base with `previous_response_id`.
+- Kept the legacy `/v1/completions` correction path available with `RADEDIT_LLM_API_MODE=completions`, and preserve the existing dynamic `80-256` output-token budget as `max_output_tokens` for `/v1/responses`.
+- Added `/v1/responses` diagnostics to the debug log, including base response initialization, cache hits, response ids, cached input tokens, output tokens, reasoning tokens, cancellation source, and fallback-to-completions failures.
+- Moved LLM proofing HTTP batches behind an off-UI-thread worker with bounded waiting and abandoned-worker observation, so slow or canceled model calls do not block the editor message pump.
+- Added UI heartbeat/watchdog diagnostics, foreground/editor state snapshots, process/unhandled-exception logging, RichTextBox focus/message logging, and an optional AutoHotkey marker script for investigating Dragon anchor loss or Windows `Not responding` periods.
+- Split field-value slot proofing into sentence-sized context units so multi-sentence field values can be proofed incrementally instead of as one larger prompt.
+
 ## v0.2.9 - 2026-04-22
 
 Changes since the previous version:

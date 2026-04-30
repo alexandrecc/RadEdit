@@ -331,44 +331,83 @@ namespace RadEdit
                     continue;
                 }
 
-                TextRange contextRange = slot.Range;
-
-                string contextKey = contextRange.Start.ToString() + ":" + contextRange.Length.ToString();
-                if (!emittedSlotContexts.Add(contextKey))
+                List<TextRange> contextRanges = BuildFieldValueSlotContextRanges(slot.Range);
+                if (contextRanges.Count > 1)
                 {
                     debugLines?.Add(
                         "Slot " + DescribeSlot(slot)
-                        + " -> no slot-context unit because context "
-                        + DescribeRange(contextRange)
-                        + " was already emitted.");
-                    continue;
+                        + " -> split field-value slot into "
+                        + contextRanges.Count.ToString(CultureInfo.InvariantCulture)
+                        + " sentence-sized slot-context units.");
                 }
 
-                if (contextRange.Start < 0 ||
-                    contextRange.Length <= 0 ||
-                    contextRange.Start + contextRange.Length > currentText.Length)
+                foreach (TextRange contextRange in contextRanges)
                 {
+                    string contextKey = contextRange.Start.ToString() + ":" + contextRange.Length.ToString();
+                    if (!emittedSlotContexts.Add(contextKey))
+                    {
+                        debugLines?.Add(
+                            "Slot " + DescribeSlot(slot)
+                            + " -> no slot-context unit because context "
+                            + DescribeRange(contextRange)
+                            + " was already emitted.");
+                        continue;
+                    }
+
+                    if (contextRange.Start < 0 ||
+                        contextRange.Length <= 0 ||
+                        contextRange.Start + contextRange.Length > currentText.Length)
+                    {
+                        debugLines?.Add(
+                            "Slot " + DescribeSlot(slot)
+                            + " -> skipped because computed context range is invalid: "
+                            + DescribeRange(contextRange));
+                        continue;
+                    }
+
+                    string contextText = currentText.Substring(contextRange.Start, contextRange.Length);
+                    units.Add(new ProofingUnit(
+                        ProofingUnitKind.SlotContext,
+                        contextRange.Start,
+                        contextRange.Length,
+                        contextText));
                     debugLines?.Add(
                         "Slot " + DescribeSlot(slot)
-                        + " -> skipped because computed context range is invalid: "
-                        + DescribeRange(contextRange));
-                    continue;
+                        + " -> emitted slot-context unit " + DescribeRange(contextRange)
+                        + " Text=" + FormatTextForLog(contextText));
                 }
-
-                units.Add(new ProofingUnit(
-                    ProofingUnitKind.SlotContext,
-                    contextRange.Start,
-                    contextRange.Length,
-                    currentText.Substring(contextRange.Start, contextRange.Length)));
-                debugLines?.Add(
-                    "Slot " + DescribeSlot(slot)
-                    + " -> emitted slot-context unit " + DescribeRange(contextRange)
-                    + " Text=" + FormatTextForLog(currentText.Substring(contextRange.Start, contextRange.Length)));
             }
 
             units.Sort((left, right) => left.Start.CompareTo(right.Start));
             debugLines?.Add("Final proofing units=" + DescribeUnits(units));
             return units;
+        }
+
+        private List<TextRange> BuildFieldValueSlotContextRanges(TextRange slotRange)
+        {
+            var ranges = new List<TextRange>();
+            if (slotRange.Start < 0 ||
+                slotRange.Length <= 0 ||
+                slotRange.Start + slotRange.Length > currentText.Length)
+            {
+                ranges.Add(slotRange);
+                return ranges;
+            }
+
+            string slotText = currentText.Substring(slotRange.Start, slotRange.Length);
+            List<SentenceSegment> segments = SentenceSegmentation.Split(slotText);
+            if (segments.Count == 0)
+            {
+                ranges.Add(slotRange);
+                return ranges;
+            }
+
+            foreach (SentenceSegment segment in segments)
+            {
+                ranges.Add(new TextRange(slotRange.Start + segment.Start, segment.Length));
+            }
+
+            return ranges;
         }
 
         private TextRange GetFieldValueSentenceShieldRange(ProofingSlot slot)
