@@ -367,3 +367,10 @@ tools/languagetool/
 
 # Local tooling
 tools/
+
+# Local sandbox/dev environment caches
+.appdata/
+.localappdata/
+.dotnet-cli/
+.dotnet-home/
+llm-events.csv
